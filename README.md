@@ -28,8 +28,8 @@ Browser (React chat UI)
    │
    ▼
 Agent orchestrator  (src/lib/agent)
-   │  Claude with tool-use. Interprets, selects tools, synthesises, clarifies.
-   │  Never computes.
+   │  Groq or Anthropic, behind one adapter. Interprets, selects tools,
+   │  synthesises, clarifies. Never computes.
    ▼
 Tool layer  (src/lib/agent/tools.ts)
    │  9 tools returning compact pre-aggregated structures, never raw dumps
@@ -54,8 +54,29 @@ monday.com API  (READ ONLY)
 | LLM ↔ analytics | Language models are unreliable at arithmetic over many records. Splitting interpretation from calculation removes a whole class of confidently-wrong answers. |
 | Normalisation ↔ analytics | Analytics can assume clean, typed records. All the mess is handled once, in one place, and reported. |
 | Data layer ↔ everything | Column titles are resolved at runtime against alias lists, so the app survives boards being rebuilt or renamed. |
+| Agent ↔ vendor | The only thing needed from a model vendor is tool calling, so it sits behind a small adapter and can be swapped with an env var. |
 
 ---
+
+## LLM provider
+
+The agent needs exactly one thing from a model vendor: **multi-turn tool calling**. It uses no structured-output mode, no vendor streaming, no prompt caching and no other vendor-specific feature, so the vendor sits behind a small adapter (`src/lib/agent/provider.ts`) and the BI layer is unaware of which one is answering.
+
+| | Groq (default) | Anthropic |
+|---|---|---|
+| Model | `openai/gpt-oss-120b` | `claude-sonnet-4-5` |
+| Cost | Free tier available | Paid |
+| Tool calling | Yes | Yes |
+| Context | 131k | 200k |
+
+Switching is two environment variables — no code change:
+
+```bash
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_...
+```
+
+Adding a third vendor means writing one adapter with a single `complete()` method; nothing in the tools, analytics or prompt layer changes.
 
 ## Features
 
@@ -82,7 +103,7 @@ Interpreted as: *prepare the data layer of a leadership update, not the prose*. 
 
 - Node.js 20+
 - A monday.com account
-- An Anthropic API key
+- An LLM API key: **Groq** (free tier) or Anthropic
 
 ### 1. Install
 
@@ -131,11 +152,16 @@ Copy `.env.example` to `.env.local` and fill in:
 | `MONDAY_API_TOKEN` | yes | monday.com personal API token. Read-only is sufficient. |
 | `MONDAY_DEALS_BOARD_ID` | yes | Numeric ID of the Deals board |
 | `MONDAY_WORK_ORDERS_BOARD_ID` | yes | Numeric ID of the Work Orders board |
-| `ANTHROPIC_API_KEY` | yes | Anthropic API key |
+| `LLM_PROVIDER` | no | `groq` or `anthropic`. Inferred from whichever key is set; defaults to `anthropic`. |
+| `GROQ_API_KEY` | if using Groq | Groq API key (free tier available) |
+| `GROQ_MODEL` | no | Defaults to `openai/gpt-oss-120b` |
+| `ANTHROPIC_API_KEY` | if using Anthropic | Anthropic API key |
 | `ANTHROPIC_MODEL` | no | Defaults to `claude-sonnet-4-5` |
 | `MONDAY_API_VERSION` | no | Defaults to `2024-10` |
 | `DATA_CACHE_TTL_SECONDS` | no | Board snapshot cache TTL, default `300` |
 | `MONDAY_WORKSPACE_ID` | no | Seed script only — target workspace |
+
+**Only the selected provider's key is required** — a Groq deployment never asks for an Anthropic key.
 
 All are read **server-side only**. None is exposed to the browser.
 
@@ -176,7 +202,7 @@ The boards created by the seed script use the source spreadsheet headers verbati
 ## Testing
 
 ```bash
-npm test          # 105 tests
+npm test          # 186 tests
 npm run typecheck
 ```
 
@@ -187,6 +213,8 @@ Coverage is concentrated on the parts that can produce a wrong business answer:
 | `tests/normalize.test.ts` | Date/number parsing across every format in the source data, null-sentinel handling, missing-vs-malformed, sector/stage/status canonicalisation, duplicate and header-echo removal, column resolution |
 | `tests/analytics.test.ts` | Pipeline/sector/operational maths, coverage accounting, weighted pipeline, win-rate edge cases, risk rules, cross-board join, empty-period explanation, division-by-zero |
 | `tests/monday.test.ts` | Mutation refusal, 401/429/5xx handling, retry policy, malformed JSON, network failure, pagination, missing board, empty board |
+| `tests/provider.test.ts` | Tool-schema translation to both vendor formats, message/tool-result encoding, argument parsing, Groq auth/rate-limit/network errors, provider selection |
+| `tests/agent-loop.test.ts` | The full agent loop against real analytics with a scripted provider: tool selection, tool-result feedback, parallel calls, cross-board queries, caveat propagation, round cap |
 | `tests/pipeline-fixture.test.ts` | **End-to-end against the real supplied spreadsheets** — every column resolves, zero malformed dates or values, sector totals reconcile with pipeline totals, duplicates and header rows removed |
 
 The fixture suite reads the assignment's spreadsheets as a *test fixture only* — they are never bundled into the application, which reads monday.com exclusively. It skips itself if the files are absent. Point it elsewhere with `FIXTURE_DEALS` / `FIXTURE_WORK_ORDERS`.

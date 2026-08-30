@@ -1,4 +1,4 @@
-import type Anthropic from '@anthropic-ai/sdk';
+import type { ToolSpec } from './provider';
 import { loadBusinessData, snapshotAgeSeconds } from '../data';
 import {
   crossBoardAnalysis,
@@ -46,18 +46,18 @@ const periodProp = {
     'Time window. "this_quarter" and similar quarter values use the Indian FINANCIAL year (Apr-Mar). Use "this_calendar_quarter" for Jan-Mar style quarters. Omit for all time.',
 };
 
-export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
+export const TOOL_DEFINITIONS: ToolSpec[] = [
   {
     name: 'get_board_overview',
     description:
       'Snapshot of both monday.com boards: record counts, available sectors, stages, statuses, owners, and the date range of the data. Call this first when you need to know what values you can filter by, or when the user asks what data is available.',
-    input_schema: { type: 'object', properties: {} },
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'get_pipeline_metrics',
     description:
       'Deterministic sales-pipeline metrics from the Deals board: open/won/lost counts, open pipeline value, probability-weighted pipeline, win rate, and a stage breakdown. Use for questions about pipeline health, forecast, or deal flow.',
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         sector: { type: 'string', description: 'Filter to one sector, e.g. "Mining".' },
@@ -82,7 +82,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: 'get_sector_analysis',
     description:
       'Per-sector comparison across BOTH boards: deal counts, open pipeline value, win rate, work-order count, order book and billed value. Use for "which sectors are performing best" or sector exposure questions.',
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         period: periodProp,
@@ -97,7 +97,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: 'get_operational_metrics',
     description:
       'Delivery and billing metrics from the Work Orders board: execution status breakdown, order book, billed, collected, unbilled and receivable values. Use for questions about project execution, revenue realisation, billing or collections.',
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         sector: { type: 'string' },
@@ -118,7 +118,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: 'get_risk_analysis',
     description:
       'Rule-based operational and commercial risks across both boards: overdue work orders, paused/blocked delivery, stalled deals past their close date, stuck invoicing, outstanding priority receivables. Use for "what should leadership worry about" or "what is at risk".',
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         limit: { type: 'integer', description: 'Max individual risks to return (default 20).' },
@@ -130,7 +130,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: 'get_cross_board_view',
     description:
       'Joins Deals and Work Orders to show accounts with pipeline, delivery, or both. Use for "which customers have both active work and open opportunities" or account-level questions. Note the boards use different customer code spaces, so the join is on deal name.',
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         only_with_both: {
@@ -145,7 +145,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: 'search_records',
     description:
       'Returns a small sample of individual deal or work-order records matching filters. Use ONLY when the user asks about specific named deals/accounts or wants examples. Never use it to compute totals — use the metric tools for that.',
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         board: { type: 'string', enum: ['deals', 'work_orders'], description: 'Which board to search.' },
@@ -166,13 +166,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: 'get_data_quality_report',
     description:
       'Field-level completeness for both boards, records dropped as duplicates or header rows, unresolved columns, and sample record-level issues. Use when the user asks how reliable the data is, or when you need to explain why a figure has caveats.',
-    input_schema: { type: 'object', properties: {} },
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'generate_leadership_update',
     description:
       'Assembles a complete leadership briefing pack in one call: headline pipeline and revenue figures, sector performance, top open deals, operational status, ranked risks, key accounts, and data-quality caveats. Use when asked for a leadership/board/exec update or a general "how is the business doing" question.',
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: { period: periodProp },
     },

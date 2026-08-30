@@ -1,8 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { loadConfig } from '../config';
 import { SYSTEM_PROMPT, contextPreamble } from './prompt';
 import { TOOL_DEFINITIONS, runTool } from './tools';
 import { describeError } from '../data';
+import { createProvider } from './factory';
+import { LlmError, type AgentMessage, type LlmProvider } from './provider';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -16,79 +17,101 @@ export type AgentEvent =
   | { type: 'done' };
 
 const MAX_TOOL_ROUNDS = 6;
+const MAX_TOKENS = 4096;
 
 /**
  * Runs one conversational turn as an async generator of events, so the API
  * route can stream tool activity to the UI as it happens. Tool errors are fed
  * back to the model as tool results rather than aborting the turn — the model
  * can then explain the failure to the user in business terms.
+ *
+ * Vendor-neutral: everything below talks to an `LlmProvider`, so the same loop
+ * drives Anthropic or Groq without change.
  */
-export async function* runAgent(history: ChatTurn[]): AsyncGenerator<AgentEvent> {
-  let cfg;
+export async function* runAgent(
+  history: ChatTurn[],
+  injected?: LlmProvider,
+): AsyncGenerator<AgentEvent> {
+  let provider: LlmProvider;
   try {
-    cfg = loadConfig();
+    provider = injected ?? createProvider(loadConfig());
   } catch (err) {
-    const e = describeError(err);
-    yield { type: 'error', ...e };
+    yield { type: 'error', ...describeError(err) };
     return;
   }
 
-  const client = new Anthropic({ apiKey: cfg.anthropicApiKey });
-
-  const messages: Anthropic.MessageParam[] = history.map((t, i) => ({
-    role: t.role,
-    content:
-      t.role === 'user' && i === history.length - 1
-        ? `${contextPreamble(new Date())}\n\n${t.content}`
-        : t.content,
-  }));
+  const messages: AgentMessage[] = history.map((t, i) => {
+    if (t.role === 'user') {
+      return {
+        role: 'user',
+        text:
+          i === history.length - 1 ? `${contextPreamble(new Date())}\n\n${t.content}` : t.content,
+      };
+    }
+    return { role: 'assistant', text: t.content, toolCalls: [] };
+  });
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    let response: Anthropic.Message;
+    let turn;
     try {
-      response = await client.messages.create({
-        model: cfg.anthropicModel,
-        max_tokens: 4096,
+      turn = await provider.complete({
         system: SYSTEM_PROMPT,
         tools: TOOL_DEFINITIONS,
         messages,
+        maxTokens: MAX_TOKENS,
       });
     } catch (err) {
       yield {
         type: 'error',
         kind: 'llm',
         message:
-          err instanceof Error
-            ? `The reasoning model could not be reached: ${err.message}`
-            : 'The reasoning model could not be reached.',
+          err instanceof LlmError
+            ? `The reasoning model could not be reached (${err.provider}): ${err.message}`
+            : err instanceof Error
+              ? `The reasoning model could not be reached: ${err.message}`
+              : 'The reasoning model could not be reached.',
       };
       return;
     }
 
-    const toolUses = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
-    );
-
-    for (const block of response.content) {
-      if (block.type === 'text' && block.text.trim()) {
-        yield { type: 'text', text: block.text };
-      }
+    for (const text of turn.text) {
+      if (text.trim()) yield { type: 'text', text };
     }
 
-    if (toolUses.length === 0 || response.stop_reason !== 'tool_use') {
+    if (turn.toolCalls.length === 0) {
       yield { type: 'done' };
       return;
     }
 
-    messages.push({ role: 'assistant', content: response.content });
+    messages.push({
+      role: 'assistant',
+      text: turn.text.join('\n\n'),
+      toolCalls: turn.toolCalls,
+    });
 
-    const results: Anthropic.ToolResultBlockParam[] = [];
-    for (const use of toolUses) {
+    const results: Array<{ id: string; name: string; content: string; isError: boolean }> = [];
+    for (const call of turn.toolCalls) {
+      // Malformed arguments are reported back to the model instead of being
+      // executed with a guessed input.
+      if (call.parseError) {
+        yield { type: 'tool', name: call.name, label: `${call.name} (bad arguments)`, input: {} };
+        results.push({
+          id: call.id,
+          name: call.name,
+          content: JSON.stringify({
+            error: call.parseError,
+            guidance: 'Re-issue the tool call with a valid JSON object of arguments.',
+          }),
+          isError: true,
+        });
+        continue;
+      }
+
       let payload: string;
       let isError = false;
-      let label = use.name;
+      let label = call.name;
       try {
-        const out = await runTool(use.name, (use.input ?? {}) as Record<string, unknown>);
+        const out = await runTool(call.name, call.input);
         label = out.label;
         payload = JSON.stringify(out.result);
       } catch (err) {
@@ -103,16 +126,11 @@ export async function* runAgent(history: ChatTurn[]): AsyncGenerator<AgentEvent>
               : 'Tell the user the request could not be completed and why. Do not invent figures.',
         });
       }
-      yield { type: 'tool', name: use.name, label, input: use.input };
-      results.push({
-        type: 'tool_result',
-        tool_use_id: use.id,
-        content: payload,
-        is_error: isError,
-      });
+      yield { type: 'tool', name: call.name, label, input: call.input };
+      results.push({ id: call.id, name: call.name, content: payload, isError });
     }
 
-    messages.push({ role: 'user', content: results });
+    messages.push({ role: 'tool_results', results });
   }
 
   yield {

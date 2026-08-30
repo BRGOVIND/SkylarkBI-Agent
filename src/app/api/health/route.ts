@@ -15,6 +15,7 @@ export async function GET() {
       {
         status: 'not_configured',
         missingEnvVars: cfg.missing,
+        llm: { provider: cfg.provider, model: cfg.model },
         hint: 'Set these environment variables and redeploy. See .env.example.',
       },
       { status: 503 },
@@ -26,6 +27,8 @@ export async function GET() {
     return Response.json({
       status: 'ok',
       monday: 'connected',
+      // Which vendor is answering, never any key material.
+      llm: { provider: cfg.provider, model: cfg.model },
       snapshotFetchedAt: data.fetchedAt,
       snapshotAgeSeconds: snapshotAgeSeconds(data),
       boards: {

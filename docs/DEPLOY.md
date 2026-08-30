@@ -7,7 +7,11 @@ credentials that must come from you — they cannot be provisioned from source.
 
 1. **monday.com API token** — monday.com → avatar → *Developers* → *My access tokens*
 2. **Two board IDs** — create the boards first (below)
-3. **Anthropic API key** — https://console.anthropic.com
+3. **An LLM API key** — either:
+   - **Groq** (recommended, free tier): https://console.groq.com/keys — default model `openai/gpt-oss-120b`
+   - **Anthropic** (paid): https://console.anthropic.com
+
+   Only one is needed. The app requires the key for whichever provider you select.
 
 ## Step 1 — create the monday.com boards
 
@@ -41,6 +45,17 @@ npm run dev                    # http://localhost:3000
 `npm run check:monday` is the fastest way to catch a wrong board ID or a token
 that cannot see a board.
 
+Then verify the model end to end against the live boards:
+
+```powershell
+npm run smoke:llm
+```
+
+It runs six founder-level questions and checks that the model selects sensible
+tools, uses the returned figures, discloses data-quality caveats, and handles a
+cross-board query and an ambiguous one. It prints the provider and model it
+used.
+
 ## Step 3 — deploy
 
 ```bash
@@ -55,15 +70,20 @@ Then add the environment variables:
 vercel env add MONDAY_API_TOKEN production
 vercel env add MONDAY_DEALS_BOARD_ID production
 vercel env add MONDAY_WORK_ORDERS_BOARD_ID production
-vercel env add ANTHROPIC_API_KEY production
+
+# Then ONE provider:
+vercel env add LLM_PROVIDER production      # value: groq
+vercel env add GROQ_API_KEY production
+# ...or, for Anthropic: LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY
+
 vercel --prod          # redeploy so the new vars take effect
 ```
 
 ## Step 4 — confirm
 
 Open `https://<your-deployment>/api/health`. A healthy deployment returns
-`"status": "ok"` with record counts for both boards and an empty
-`unresolvedColumns` list.
+`"status": "ok"` with record counts for both boards, an empty
+`unresolvedColumns` list, and the `llm` provider/model in use.
 
 If it returns `not_configured`, the listed variables are missing. If it returns
 `error`, the message states exactly what monday.com rejected.
