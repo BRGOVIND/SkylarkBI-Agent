@@ -28,7 +28,34 @@ const TITLE = 'Skylark Intelligence — business intelligence agent';
 const DESCRIPTION =
   'Ask questions across your deals and work orders and get answers grounded in live monday.com data, with the coverage behind every number.';
 
+/**
+ * Absolute base for resolving the relative Open Graph and Twitter image URLs.
+ *
+ * Without it Next.js assumes http://localhost:3000, which would put a localhost
+ * link into the metadata of every deployment. Resolved from the environment so
+ * a preview deployment advertises its own URL rather than production's:
+ *
+ *   SITE_URL                        explicit override, if ever needed
+ *   VERCEL_PROJECT_PRODUCTION_URL   the project's production domain
+ *   VERCEL_URL                      this specific deployment (previews)
+ *   the production domain           local builds, so it is never localhost
+ *
+ * All are ordinary server-side values read at build time — a public site
+ * address, never a secret, and never exposed through NEXT_PUBLIC_.
+ */
+function siteUrl(): URL {
+  const explicit = process.env.SITE_URL?.trim();
+  if (explicit) return new URL(explicit);
+
+  const host =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim();
+  if (host) return new URL(`https://${host}`);
+
+  return new URL('https://skylarkintelligence.vercel.app');
+}
+
 export const metadata: Metadata = {
+  metadataBase: siteUrl(),
   title: TITLE,
   description: DESCRIPTION,
   applicationName: 'Skylark BI Agent',

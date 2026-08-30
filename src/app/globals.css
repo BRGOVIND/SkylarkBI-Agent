@@ -1264,3 +1264,242 @@ body {
     to { opacity: 1; }
   }
 }
+
+/* =============================== your data ================================
+   Uploaded datasets. Same instrument language as the rest of the workspace:
+   charcoal surfaces, orange only as signal, data set in the mono face.
+   ========================================================================= */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.datasets {
+  margin-bottom: 30px;
+}
+
+.datasets-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 11px;
+}
+
+.datasets-head h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--paper-dim);
+  letter-spacing: 0.015em;
+  margin: 0;
+}
+
+.datasets-note {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--paper-faint);
+  letter-spacing: -0.01em;
+}
+
+/* -------------------------------- dropzone -------------------------------- */
+
+.dropzone {
+  border: 1px dashed var(--line);
+  border-radius: var(--r);
+  background: var(--ink);
+  transition: border-color 0.22s var(--ease), background 0.22s var(--ease);
+}
+.dropzone.over {
+  border-color: var(--signal);
+  background: var(--signal-wash);
+}
+.dropzone.busy {
+  border-style: solid;
+  border-color: var(--signal-edge);
+}
+.dropzone:focus-within {
+  border-color: var(--signal-edge);
+  box-shadow: 0 0 0 3px var(--signal-wash);
+}
+
+.dropzone-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 20px 16px;
+  cursor: pointer;
+  text-align: center;
+}
+.dropzone.busy .dropzone-label {
+  cursor: default;
+}
+
+.dz-title {
+  font-size: 13.5px;
+  color: var(--paper);
+}
+.dropzone.over .dz-title {
+  color: var(--white);
+}
+
+.dz-hint {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--paper-faint);
+  letter-spacing: 0.01em;
+}
+
+.dz-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--white);
+}
+
+/* a single travelling mark — the same idea as the telemetry rail's scan */
+.dz-spark {
+  width: 22px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right, transparent, var(--signal), transparent);
+  animation: dz-scan 1.2s var(--ease) infinite;
+}
+@keyframes dz-scan {
+  0% { transform: translateX(-8px); opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { transform: translateX(8px); opacity: 0.3; }
+}
+
+/* ------------------------------ dataset card ------------------------------ */
+
+.ds-card {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  margin-bottom: 9px;
+}
+
+.ds-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.ds-id {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ds-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--white);
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+
+.ds-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--paper-faint);
+  letter-spacing: -0.01em;
+}
+
+.ds-top .linkish {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.ds-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 11px;
+}
+
+.ds-col {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--paper-dim);
+  background: var(--ink-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 100px;
+  padding: 3px 9px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.ds-col i {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--signal);
+  letter-spacing: 0.01em;
+}
+.ds-col-more {
+  color: var(--paper-faint);
+}
+
+.ds-warn {
+  margin: 11px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--paper-dim);
+  padding-left: 10px;
+  border-left: 2px solid var(--signal-edge);
+}
+
+.ds-card .rail-summary {
+  margin: 12px 0 0;
+}
+
+.ds-preview {
+  margin-top: 11px;
+}
+.ds-preview th em {
+  display: block;
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--signal);
+  letter-spacing: 0.01em;
+  margin-top: 1px;
+}
+.ds-preview .ds-null {
+  color: var(--paper-faint);
+}
+
+.ds-error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #ffc9c9;
+  background: rgba(248, 113, 113, 0.06);
+  border: 1px solid rgba(248, 113, 113, 0.26);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+}
+
+@media (max-width: 640px) {
+  .dropzone-label { padding: 16px 12px; }
+  .ds-card { padding: 12px 13px; }
+  .datasets-head { flex-wrap: wrap; gap: 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dz-spark { animation: none; opacity: 1; }
+}

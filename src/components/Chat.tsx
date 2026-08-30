@@ -9,6 +9,8 @@ import AgentStatus, { type AgentState } from './AgentStatus';
 import Footer from './Footer';
 import Opening, { useIntro } from './Opening';
 import TelemetryRail, { type RailStep } from './TelemetryRail';
+import { parseNdjson } from '@/lib/agent/stream';
+import DatasetPanel, { type LoadedDataset } from './DatasetPanel';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -62,6 +64,12 @@ export default function Chat() {
   const [aboutOpen, setAboutOpen] = useState(false);
   /** Brief "Ready" beat after a turn completes, then back to Connected. */
   const [justFinished, setJustFinished] = useState(false);
+  /**
+   * Uploaded datasets belong to the workspace, not the conversation: starting a
+   * new conversation keeps them, because re-uploading each time would be
+   * hostile. They live in memory only and are gone on refresh.
+   */
+  const [datasets, setDatasets] = useState<LoadedDataset[]>([]);
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   const workspaceRef = useRef<HTMLElement>(null);
@@ -111,6 +119,8 @@ export default function Chat() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             messages: history.map(({ role, content }) => ({ role, content })),
+            // The server holds nothing, so the datasets travel with the question.
+            datasets: datasets.map((d) => d.snapshot),
           }),
         });
 
@@ -122,23 +132,23 @@ export default function Chat() {
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-        let buf = '';
+        const ndjson = parseNdjson<{
+          type: string;
+          text?: string;
+          label?: string;
+          name?: string;
+          message?: string;
+        }>();
 
         for (;;) {
           const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split('\n');
-          buf = lines.pop() ?? '';
+          // On the final read, flush whatever arrived without a trailing
+          // newline so the last message is never dropped.
+          const events = done
+            ? [...ndjson.push(decoder.decode()), ...ndjson.flush()]
+            : ndjson.push(decoder.decode(value, { stream: true }));
 
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            let ev: { type: string; text?: string; label?: string; name?: string; message?: string };
-            try {
-              ev = JSON.parse(line);
-            } catch {
-              continue;
-            }
+          for (const ev of events) {
             if (ev.type === 'tool') {
               patch((m) => ({
                 ...m,
@@ -157,6 +167,8 @@ export default function Chat() {
               patch((m) => ({ ...m, error: ev.message }));
             }
           }
+
+          if (done) break;
         }
       } catch {
         patch((m) => ({ ...m, error: 'Lost connection to the agent. Please try again.' }));
@@ -167,7 +179,7 @@ export default function Chat() {
         setTimeout(() => setJustFinished(false), 2600);
       }
     },
-    [busy, messages],
+    [busy, messages, datasets],
   );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -289,6 +301,16 @@ export default function Chat() {
                 problem rather than a fault in your question &mdash; try again shortly.
               </div>
             )}
+
+            <DatasetPanel
+              datasets={datasets}
+              onAdd={(d) => setDatasets((prev) => [...prev, d])}
+              onRemove={(id) =>
+                setDatasets((prev) => prev.filter((d) => d.snapshot.id !== id))
+              }
+              disabled={busy}
+              max={5}
+            />
 
             {empty ? (
               <div className="starter">
