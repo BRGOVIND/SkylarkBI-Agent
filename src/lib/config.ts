@@ -69,10 +69,23 @@ export function modelFor(provider: LlmProviderName, env: EnvLike = process.env):
   return env[MODEL_VAR[provider]]?.trim() || DEFAULT_MODELS[provider];
 }
 
-function req(name: string, missing: string[]): string {
+/**
+ * The label to use when the provider key is absent. Shared by loadConfig and
+ * configStatus so both paths tell an operator the same thing.
+ */
+function providerKeyLabel(env: EnvLike = process.env): string {
+  const provider = resolveProvider(env);
+  const chosen = !!env.LLM_PROVIDER?.trim();
+  const anyKey = (['gemini', 'groq', 'anthropic'] as LlmProviderName[]).some(
+    (p) => env[KEY_VAR[p]]?.trim(),
+  );
+  return chosen || anyKey ? KEY_VAR[provider] : 'LLM_PROVIDER and its matching API key';
+}
+
+function req(name: string, missing: string[], label = name): string {
   const v = process.env[name]?.trim();
   if (!v) {
-    missing.push(name);
+    missing.push(label);
     return '';
   }
   return v;
@@ -88,8 +101,11 @@ export function loadConfig(): AppConfig {
     workOrdersBoardId: req('MONDAY_WORK_ORDERS_BOARD_ID', missing),
     llm: {
       provider,
-      // Only the selected provider's key is required.
-      apiKey: req(KEY_VAR[provider], missing),
+      // Only the selected provider's key is required — and when no provider was
+      // chosen and no key of any kind exists, the requirement is reported as a
+      // category. Naming ANTHROPIC_API_KEY to an operator who intends to use
+      // Gemini sends them to fix the wrong thing. Mirrors configStatus().
+      apiKey: req(KEY_VAR[provider], missing, providerKeyLabel()),
       model: modelFor(provider),
     },
     cacheTtlSeconds: Number(process.env.DATA_CACHE_TTL_SECONDS ?? 300),
@@ -129,18 +145,7 @@ export function configStatus(): {
     if (!process.env[k]?.trim()) missing.push(k);
   }
 
-  const providerChosen = !!process.env.LLM_PROVIDER?.trim();
-  const anyProviderKey = (['gemini', 'groq', 'anthropic'] as LlmProviderName[]).some(
-    (p) => process.env[KEY_VAR[p]]?.trim(),
-  );
-
-  if (!process.env[KEY_VAR[provider]]?.trim()) {
-    missing.push(
-      providerChosen || anyProviderKey
-        ? KEY_VAR[provider]
-        : 'LLM_PROVIDER and its matching API key',
-    );
-  }
+  if (!process.env[KEY_VAR[provider]]?.trim()) missing.push(providerKeyLabel());
 
   return { ok: missing.length === 0, missing, provider, model: modelFor(provider) };
 }

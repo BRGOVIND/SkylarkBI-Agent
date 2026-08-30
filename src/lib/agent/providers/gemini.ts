@@ -400,7 +400,9 @@ export class GeminiProvider implements LlmProvider {
     for (const part of parts) {
       // Thought summaries are not answer content.
       if (part.thought) continue;
-      if (typeof part.text === 'string' && part.text.trim()) textOut.push(part.text);
+      // Kept even when it is only whitespace: a part carrying just a
+      // paragraph break is still part of the answer.
+      if (typeof part.text === 'string' && part.text) textOut.push(part.text);
       if (part.functionCall) {
         // The signature is a Part-level field, but accept a nested one too so a
         // response shape variant cannot silently drop it. Preserved verbatim —

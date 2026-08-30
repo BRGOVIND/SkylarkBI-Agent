@@ -80,7 +80,7 @@ export class AnthropicProvider implements LlmProvider {
     const text: string[] = [];
     const toolCalls = [];
     for (const block of response.content) {
-      if (block.type === 'text' && block.text.trim()) text.push(block.text);
+      if (block.type === 'text' && block.text) text.push(block.text);
       else if (block.type === 'tool_use') {
         toolCalls.push({
           id: block.id,

@@ -557,3 +557,56 @@ describe('setup reporting names only the relevant provider', () => {
     expect(s.missing).toEqual([]);
   });
 });
+
+/* -------------- loadConfig reports the same thing as configStatus --------- */
+
+describe('the chat path reports the same missing config as the health path', () => {
+  const ENV = { ...process.env };
+  beforeEach(() => {
+    for (const k of [
+      'LLM_PROVIDER', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'ANTHROPIC_API_KEY',
+      'MONDAY_API_TOKEN', 'MONDAY_DEALS_BOARD_ID', 'MONDAY_WORK_ORDERS_BOARD_ID',
+    ]) delete process.env[k];
+  });
+  afterEach(() => {
+    process.env = { ...ENV };
+  });
+
+  it('does not name Anthropic when nothing at all is configured', async () => {
+    const { loadConfig } = await import('@/lib/config');
+    // The chat route surfaces this message to the user, so it must not send
+    // someone who intends to use Gemini off to create an Anthropic key.
+    try {
+      loadConfig();
+      throw new Error('should have thrown');
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).not.toMatch(/ANTHROPIC_API_KEY/);
+      expect(msg).toMatch(/LLM_PROVIDER and its matching API key/);
+    }
+  });
+
+  it('names the Gemini key once Gemini is the chosen provider', async () => {
+    process.env.LLM_PROVIDER = 'gemini';
+    const { loadConfig } = await import('@/lib/config');
+    try {
+      loadConfig();
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect((err as Error).message).toMatch(/GEMINI_API_KEY/);
+      expect((err as Error).message).not.toMatch(/ANTHROPIC/);
+    }
+  });
+
+  it('agrees with configStatus on the same environment', async () => {
+    const { loadConfig, configStatus } = await import('@/lib/config');
+    const fromStatus = configStatus().missing;
+    let fromLoad: string[] = [];
+    try {
+      loadConfig();
+    } catch (err) {
+      fromLoad = (err as { missing: string[] }).missing;
+    }
+    expect(fromLoad.sort()).toEqual(fromStatus.sort());
+  });
+});
