@@ -1,32 +1,33 @@
 /* ============================================================================
    Skylark BI Agent — design system
 
-   Near-black instrument panel, Skylark orange as signal, warm white type.
-   Orange is reserved for: the mark, active state, live figures, focus, and the
-   telemetry rail. Everything else stays quiet.
+   A near-black instrument panel that lifts as you move into it: the hero sits
+   on the deepest ground, the workspace on a lighter charcoal, and answers are
+   set in near-white. Skylark orange is signal only — the mark, active state,
+   emphasised figures, focus, and the agent's own status.
    ========================================================================== */
 
 :root {
-  /* Ground */
-  --ink: #0a0a0b;
-  --ink-raised: #131316;
-  --ink-sunk: #08080a;
-  --ink-line: #232328;
-  --ink-line-soft: #1a1a1e;
+  /* Ground, deepest to lightest */
+  --ink: #08080a;
+  --ink-2: #0e0e11;
+  --surface: #17171c;
+  --surface-lift: #1e1e25;
+  --line: #2a2a33;
+  --line-soft: #1d1d24;
 
   /* Signal — sampled from the Skylark mark */
   --signal: #f0552b;
   --signal-lift: #ff7a4d;
-  --signal-wash: rgba(240, 85, 43, 0.1);
-  --signal-edge: rgba(240, 85, 43, 0.28);
+  --signal-wash: rgba(240, 85, 43, 0.11);
+  --signal-edge: rgba(240, 85, 43, 0.3);
 
-  /* Type */
-  --paper: #f5f4f2;
-  --paper-dim: #9b9aa0;
-  --paper-faint: #66656c;
+  /* Type, brightest to quietest */
+  --white: #ffffff;
+  --paper: #ecebef;
+  --paper-dim: #a5a4ac;
+  --paper-faint: #6e6d76;
 
-  /* State */
-  --ok: #4ade80;
   --warn: #fbbf24;
   --bad: #f87171;
 
@@ -39,17 +40,22 @@
 
   --ease: cubic-bezier(0.2, 0.7, 0.25, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --shell: 900px;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body {
   margin: 0;
   padding: 0;
-  height: 100%;
   background: var(--ink);
   color: var(--paper);
   font-family: var(--sans);
@@ -59,14 +65,6 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-body {
-  /* A single, very soft warm bloom from the top — the instrument waking up.
-     No gradient wash across the whole page. */
-  background-image: radial-gradient(120% 60% at 50% -10%, rgba(240, 85, 43, 0.07), transparent 60%);
-  background-repeat: no-repeat;
-  background-attachment: fixed;
-}
-
 ::selection {
   background: var(--signal);
   color: #fff;
@@ -74,195 +72,378 @@ body {
 
 :focus-visible {
   outline: 2px solid var(--signal);
-  outline-offset: 2px;
+  outline-offset: 3px;
   border-radius: 3px;
 }
 
-/* ============================== app shell ================================= */
-
-.app {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  height: 100dvh;
-  max-width: 880px;
-  margin: 0 auto;
-  padding: 0 24px;
-  /* Without this, a wide table stretches the whole grid instead of scrolling. */
+.page {
   min-width: 0;
 }
 
-.app > * {
-  min-width: 0;
-}
-
-/* ================================ header ================================== */
-
-.header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 18px 2px 14px;
-  border-bottom: 1px solid var(--ink-line-soft);
-}
-
-.header-id {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.header h1 {
-  font-size: 14.5px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  margin: 0;
-  white-space: nowrap;
-}
-
-.header h1 span {
-  color: var(--paper-faint);
-  font-weight: 400;
-}
-
-/* connection status */
-.status {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: -0.01em;
-  color: var(--paper-dim);
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.status b {
-  color: var(--paper);
-  font-weight: 500;
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--paper-faint);
-  flex-shrink: 0;
-  transition: background 0.4s var(--ease), box-shadow 0.4s var(--ease);
-}
-.dot.live {
-  background: var(--ok);
-  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.14);
-}
-.dot.warn {
-  background: var(--warn);
-  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.14);
-}
-.dot.bad {
-  background: var(--bad);
-  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.14);
-}
-
-/* ================================= feed =================================== */
-
-.feed {
-  overflow-y: auto;
-  padding: 28px 2px 8px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--ink-line) transparent;
-  scroll-behavior: smooth;
-}
-.feed::-webkit-scrollbar {
-  width: 9px;
-}
-.feed::-webkit-scrollbar-thumb {
-  background: var(--ink-line);
-  border-radius: 5px;
-  border: 3px solid var(--ink);
-}
-
-/* ================================= hero =================================== */
+/* =================================== hero =================================
+   The deepest ground in the product. One statement, one explanation, the
+   agent's live status, and a way down.
+   ========================================================================= */
 
 .hero {
-  padding: 8px 0 4px;
+  position: relative;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 80px 24px 96px;
+  /* a single warm bloom behind the mark — the instrument waking up */
+  background:
+    radial-gradient(90% 50% at 50% 12%, rgba(240, 85, 43, 0.1), transparent 62%),
+    var(--ink);
 }
 
-.hero-line {
-  font-size: clamp(29px, 5vw, 42px);
-  line-height: 1.04;
-  letter-spacing: -0.035em;
-  font-weight: 600;
-  margin: 0 0 16px;
-  max-width: 15ch;
+/* the seam into the workspace */
+.hero::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(var(--shell), calc(100% - 48px));
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--line), transparent);
 }
 
-.hero-line em {
-  font-style: normal;
-  color: var(--signal);
+.hero-inner {
+  width: 100%;
+  max-width: var(--shell);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
-.hero-sub {
-  color: var(--paper-dim);
-  font-size: 15px;
-  line-height: 1.6;
-  margin: 0 0 28px;
-  max-width: 54ch;
-}
-
-/* staged entrance */
-.stagger > * {
+.hero-inner > * {
   opacity: 0;
-  transform: translateY(10px);
-  animation: rise 0.6s var(--ease-out) forwards;
+  animation: rise 0.7s var(--ease-out) forwards;
 }
-.stagger > *:nth-child(1) { animation-delay: 0.02s; }
-.stagger > *:nth-child(2) { animation-delay: 0.09s; }
-.stagger > *:nth-child(3) { animation-delay: 0.16s; }
-.stagger > *:nth-child(4) { animation-delay: 0.23s; }
+.hero-inner > *:nth-child(1) { animation-delay: 0.05s; }
+.hero-inner > *:nth-child(2) { animation-delay: 0.14s; }
+.hero-inner > *:nth-child(3) { animation-delay: 0.23s; }
+.hero-inner > *:nth-child(4) { animation-delay: 0.34s; }
+.hero-inner > *:nth-child(5) { animation-delay: 0.46s; }
 
 @keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
   to {
     opacity: 1;
     transform: none;
   }
 }
 
-/* =========================== sample questions ============================= */
+.hero-mark {
+  margin-bottom: 26px;
+}
 
-.prompts-label {
+.hero-title {
+  font-size: clamp(38px, 7.4vw, 74px);
+  line-height: 1;
+  letter-spacing: -0.042em;
+  font-weight: 600;
+  color: var(--white);
+  margin: 0 0 22px;
+}
+
+.hero-title em {
+  font-style: normal;
+  color: var(--signal);
+}
+
+.hero-sub {
+  color: var(--paper-dim);
+  font-size: clamp(15px, 1.6vw, 17.5px);
+  line-height: 1.6;
+  margin: 0 0 34px;
+  max-width: 52ch;
+}
+
+.hero-status {
+  margin-bottom: 46px;
+}
+
+.scroll-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  color: var(--paper-dim);
+  text-decoration: none;
+  padding: 9px 15px 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 100px;
+  background: var(--ink-2);
+  transition: border-color 0.24s var(--ease), color 0.24s var(--ease),
+    background 0.24s var(--ease);
+}
+.scroll-cue:hover {
+  color: var(--white);
+  border-color: var(--signal-edge);
+  background: var(--surface);
+}
+.scroll-cue svg {
+  animation: nudge 2.4s var(--ease) infinite;
+}
+@keyframes nudge {
+  0%, 70%, 100% { transform: none; }
+  82% { transform: translateY(3px); }
+}
+
+/* ============================== agent status ==============================
+   The mark inside a ring. A short arc sweeps that ring only while the agent is
+   genuinely working; everything else is a resting state.
+   ========================================================================= */
+
+.agent-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.orbit {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.orbit-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.ring-base {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+  transition: stroke 0.45s var(--ease);
+}
+
+.ring-sweep {
+  fill: none;
+  stroke: var(--signal);
+  stroke-width: 2;
+  stroke-linecap: round;
+  /* r=17 -> circumference ~106.8; a 26-unit arc is roughly a quarter turn */
+  stroke-dasharray: 26 81;
+  transform-origin: 50% 50%;
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+}
+
+.orbit-core {
+  display: grid;
+  place-items: center;
+  transition: transform 0.5s var(--ease-out);
+}
+
+/* working — the only state that moves */
+[data-state='working'] .ring-sweep {
+  opacity: 1;
+  animation: sweep 1.5s linear infinite;
+}
+[data-state='working'] .ring-base {
+  stroke: var(--line-soft);
+}
+@keyframes sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ready — settles with one pulse, then returns to rest */
+[data-state='ready'] .ring-base {
+  stroke: var(--signal-edge);
+}
+[data-state='ready'] .orbit-core {
+  animation: settle 0.6s var(--ease-out);
+}
+@keyframes settle {
+  40% {
+    transform: scale(1.12);
+  }
+}
+
+[data-state='connecting'] .ring-base {
+  stroke: var(--line-soft);
+}
+[data-state='setup'] .ring-base {
+  stroke: rgba(251, 191, 36, 0.5);
+}
+[data-state='offline'] .ring-base {
+  stroke: rgba(248, 113, 113, 0.5);
+}
+
+.agent-status-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.agent-status-label {
+  font-size: 13px;
+  color: var(--paper);
+  letter-spacing: -0.01em;
+}
+.agent-status-label b {
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--signal);
+}
+
+.agent-status-detail {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--paper-faint);
-  letter-spacing: 0.02em;
-  margin-bottom: 12px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-state='setup'] .agent-status-label { color: #ffe3a3; }
+[data-state='offline'] .agent-status-label { color: #ffc9c9; }
+
+/* =============================== workspace ================================ */
+
+.workspace {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--ink-2);
+}
+
+/* Full-bleed so nothing scrolls past it at the sides; the contents stay on the
+   same 900px shell as the feed below. */
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: rgba(14, 14, 17, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 14px 24px;
+}
+
+.bar-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.bar-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--white);
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+}
+.bar-name span {
+  color: var(--paper-faint);
+  font-weight: 400;
+}
+
+.bar-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.ghost-btn {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--paper-dim);
+  border-radius: 100px;
+  padding: 5px 13px;
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.ghost-btn:hover {
+  color: var(--white);
+  border-color: var(--paper-faint);
+}
+
+/* ================================= feed =================================== */
+
+.feed {
+  flex: 1;
+  width: 100%;
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 40px 24px 24px;
+  min-width: 0;
+}
+
+/* ============================== empty state =============================== */
+
+/* clears the sticky bar when scrolled into view */
+.starter-title,
+.msg {
+  scroll-margin-top: 78px;
+}
+
+.starter-title {
+  font-size: clamp(21px, 2.6vw, 26px);
+  font-weight: 600;
+  color: var(--white);
+  letter-spacing: -0.028em;
+  margin: 0 0 22px;
 }
 
 .prompts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 9px;
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 10px;
 }
 
 .prompt {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
   text-align: left;
-  background: var(--ink-raised);
-  border: 1px solid var(--ink-line-soft);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
   color: var(--paper);
-  padding: 13px 15px;
+  padding: 15px 17px;
   border-radius: var(--r);
   font-family: inherit;
-  font-size: 14px;
-  line-height: 1.4;
   cursor: pointer;
   overflow: hidden;
   transition: border-color 0.22s var(--ease), background 0.22s var(--ease),
     transform 0.22s var(--ease);
 }
 
-/* the orange edge only appears on intent */
+/* the orange edge appears only on intent */
 .prompt::before {
   content: '';
   position: absolute;
@@ -278,9 +459,9 @@ body {
 
 .prompt:hover:not(:disabled),
 .prompt:focus-visible {
-  border-color: var(--ink-line);
-  background: #17171b;
-  transform: translateY(-1px);
+  border-color: var(--line);
+  background: var(--surface-lift);
+  transform: translateY(-2px);
 }
 .prompt:hover:not(:disabled)::before,
 .prompt:focus-visible::before {
@@ -291,26 +472,30 @@ body {
   cursor: not-allowed;
 }
 
-.prompt small {
-  display: block;
+.prompt-q {
+  font-size: 14.5px;
+  line-height: 1.35;
+  color: var(--white);
+}
+
+.prompt-hint {
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--paper-faint);
-  margin-top: 5px;
   letter-spacing: -0.01em;
 }
 
 /* =============================== messages ================================= */
 
 .msg {
-  margin-bottom: 26px;
-  animation: msg-in 0.4s var(--ease-out) both;
+  margin-bottom: 30px;
+  animation: msg-in 0.42s var(--ease-out) both;
 }
 
 @keyframes msg-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(7px);
   }
 }
 
@@ -320,25 +505,26 @@ body {
 }
 
 .msg-user .bubble {
-  background: var(--ink-raised);
-  border: 1px solid var(--ink-line);
-  padding: 10px 15px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 11px 16px;
   border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg);
-  max-width: 84%;
+  max-width: 82%;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 14.5px;
+  color: var(--white);
 }
 
 /* ============================ telemetry rail ==============================
-   The signature element. Real tool events, in order, with elapsed time — the
-   audit trail behind every figure the agent reports.
+   Real tool events, in order, with elapsed time — the audit trail behind every
+   figure the agent reports.
    ========================================================================= */
 
 .rail {
   position: relative;
   padding-left: 22px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .rail::before {
@@ -348,10 +534,9 @@ body {
   top: 5px;
   bottom: 5px;
   width: 1px;
-  background: #2c2c33;
+  background: var(--line);
 }
 
-/* while working, the rail carries a travelling pulse */
 .rail.live::after {
   content: '';
   position: absolute;
@@ -376,7 +561,7 @@ body {
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--paper-dim);
-  padding: 2.5px 0;
+  padding: 3px 0;
   letter-spacing: -0.01em;
   animation: step-in 0.34s var(--ease-out) both;
 }
@@ -396,8 +581,8 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--ink);
-  border: 1px solid var(--ink-line);
+  background: var(--ink-2);
+  border: 1px solid var(--line);
 }
 
 .step.done::before {
@@ -406,7 +591,7 @@ body {
 }
 
 .step.active {
-  color: var(--paper);
+  color: var(--white);
 }
 .step.active::before {
   background: var(--signal);
@@ -423,10 +608,9 @@ body {
 
 .step-time {
   color: var(--paper-faint);
-  margin-left: 6px;
+  margin-left: 7px;
 }
 
-/* collapsed summary once the answer has landed */
 .rail-summary {
   display: inline-flex;
   align-items: center;
@@ -434,7 +618,7 @@ body {
   background: none;
   border: none;
   padding: 0;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--paper-faint);
@@ -455,34 +639,33 @@ body {
 /* ============================ answer typography =========================== */
 
 .body {
-  font-size: 15px;
-  line-height: 1.68;
-  max-width: 68ch;
-  /* A long unbroken figure or token must wrap, never widen the page. */
+  font-size: 15.5px;
+  line-height: 1.7;
+  max-width: 70ch;
   overflow-wrap: anywhere;
 }
 .body > :first-child { margin-top: 0; }
 .body > :last-child { margin-bottom: 0; }
 
 .body p {
-  margin: 0 0 13px;
+  margin: 0 0 14px;
 }
 
-/* The opening sentence carries the answer — give it presence. */
+/* the opening sentence carries the answer */
 .body > p:first-of-type {
-  font-size: 16.5px;
+  font-size: 17.5px;
   line-height: 1.55;
-  color: #fff;
-  letter-spacing: -0.011em;
+  color: var(--white);
+  letter-spacing: -0.013em;
 }
 
 .body ul,
 .body ol {
-  margin: 0 0 13px;
-  padding-left: 18px;
+  margin: 0 0 14px;
+  padding-left: 19px;
 }
 .body li {
-  margin-bottom: 6px;
+  margin-bottom: 7px;
   padding-left: 3px;
 }
 .body li::marker {
@@ -491,15 +674,15 @@ body {
 }
 
 .body strong {
-  color: #fff;
+  color: var(--white);
   font-weight: 600;
 }
 
-/* A figure the agent chose to emphasise, set in the data face. */
+/* a figure the agent chose to emphasise, set in the data face */
 .body strong.metric {
   font-family: var(--mono);
   font-weight: 500;
-  font-size: 0.95em;
+  font-size: 0.94em;
   color: var(--signal-lift);
   letter-spacing: -0.02em;
 }
@@ -510,25 +693,25 @@ body {
   font-size: 12px;
   font-weight: 600;
   color: var(--paper-dim);
-  letter-spacing: 0.01em;
-  margin: 22px 0 9px;
+  letter-spacing: 0.015em;
+  margin: 24px 0 10px;
 }
 
 .body code {
   font-family: var(--mono);
   font-size: 12.5px;
-  background: var(--ink-raised);
-  border: 1px solid var(--ink-line-soft);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
   padding: 1.5px 5px;
   border-radius: var(--r-sm);
   color: var(--paper);
 }
 
 .body pre {
-  background: var(--ink-sunk);
-  border: 1px solid var(--ink-line-soft);
+  background: var(--ink);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r);
-  padding: 13px;
+  padding: 14px;
   overflow-x: auto;
 }
 .body pre code {
@@ -537,24 +720,24 @@ body {
   padding: 0;
 }
 
-/* Caveats: visible, deliberately secondary. Never hidden — missing data is
-   not zero, and the reader must be able to see why. */
+/* Caveats: visible, deliberately secondary. Never hidden — missing data is not
+   zero, and the reader must be able to see why. */
 .body blockquote {
-  margin: 0 0 13px;
-  padding: 11px 14px;
-  background: rgba(240, 85, 43, 0.045);
+  margin: 0 0 14px;
+  padding: 12px 15px;
+  background: rgba(240, 85, 43, 0.05);
   border-left: 2px solid var(--signal-edge);
   border-radius: 0 var(--r-sm) var(--r-sm) 0;
   color: var(--paper-dim);
   font-size: 13.5px;
-  line-height: 1.6;
+  line-height: 1.62;
 }
 .body blockquote p:last-child { margin-bottom: 0; }
 
 .table-wrap {
   overflow-x: auto;
-  margin: 0 0 14px;
-  border: 1px solid var(--ink-line-soft);
+  margin: 0 0 15px;
+  border: 1px solid var(--line-soft);
   border-radius: var(--r);
   -webkit-overflow-scrolling: touch;
 }
@@ -566,13 +749,13 @@ body {
 }
 .body th,
 .body td {
-  padding: 8px 13px;
+  padding: 9px 14px;
   text-align: left;
-  border-bottom: 1px solid var(--ink-line-soft);
+  border-bottom: 1px solid var(--line-soft);
   white-space: nowrap;
 }
 .body th {
-  background: var(--ink-sunk);
+  background: var(--surface);
   font-family: var(--mono);
   font-weight: 500;
   font-size: 11px;
@@ -580,28 +763,28 @@ body {
   letter-spacing: -0.01em;
 }
 .body td { color: var(--paper-dim); }
-.body td:first-child { color: var(--paper); }
+.body td:first-child { color: var(--white); }
 .body tr:last-child td { border-bottom: none; }
 
 .body hr {
   border: none;
-  border-top: 1px solid var(--ink-line-soft);
-  margin: 20px 0;
+  border-top: 1px solid var(--line-soft);
+  margin: 22px 0;
 }
 
 /* ================================ banners ================================= */
 
 .banner {
   border-radius: var(--r);
-  padding: 13px 15px;
-  margin-bottom: 18px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
   font-size: 13.5px;
   line-height: 1.6;
   border: 1px solid;
 }
 .banner strong {
   display: block;
-  margin-bottom: 3px;
+  margin-bottom: 4px;
   font-weight: 600;
 }
 .banner.setup {
@@ -625,21 +808,32 @@ body {
 /* =============================== composer ================================= */
 
 .composer {
-  padding: 12px 0 20px;
-  border-top: 1px solid var(--ink-line-soft);
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  background: linear-gradient(to top, var(--ink-2) 72%, rgba(14, 14, 17, 0));
+}
+
+.composer-inner {
+  width: 100%;
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 14px 24px 22px;
 }
 
 .composer-row {
   display: flex;
   gap: 10px;
   align-items: flex-end;
-  background: var(--ink-raised);
-  border: 1px solid var(--ink-line);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  padding: 9px 9px 9px 15px;
-  transition: border-color 0.24s var(--ease), box-shadow 0.24s var(--ease);
+  padding: 10px 10px 10px 16px;
+  transition: border-color 0.24s var(--ease), box-shadow 0.24s var(--ease),
+    background 0.24s var(--ease);
 }
 .composer-row:focus-within {
+  background: var(--surface-lift);
   border-color: var(--signal-edge);
   box-shadow: 0 0 0 3px var(--signal-wash);
 }
@@ -649,7 +843,7 @@ body {
   background: none;
   border: none;
   outline: none;
-  color: var(--paper);
+  color: var(--white);
   font-family: inherit;
   font-size: 15px;
   line-height: 1.5;
@@ -671,15 +865,15 @@ body {
   background: var(--signal);
   color: #fff;
   border: none;
-  border-radius: 9px;
-  padding: 9px 15px;
+  border-radius: 10px;
+  padding: 10px 16px;
   font-size: 13.5px;
   font-weight: 600;
   font-family: inherit;
   letter-spacing: -0.01em;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.18s var(--ease), transform 0.12s var(--ease), opacity 0.18s var(--ease);
+  transition: background 0.18s var(--ease), transform 0.12s var(--ease);
 }
 .send:not(:disabled):hover {
   background: var(--signal-lift);
@@ -688,7 +882,7 @@ body {
   transform: scale(0.97);
 }
 .send:disabled {
-  background: var(--ink-line);
+  background: var(--surface-lift);
   color: var(--paper-faint);
   cursor: not-allowed;
 }
@@ -697,7 +891,7 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-top: 10px;
+  margin-top: 11px;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--paper-faint);
@@ -724,20 +918,185 @@ body {
 
 .foot-note {
   margin-left: auto;
-  display: inline-flex;
+}
+
+/* ============================== about dialog ============================== */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(4, 4, 6, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  animation: fade 0.22s var(--ease) both;
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+}
+
+.about {
+  width: 100%;
+  max-width: 560px;
+  max-height: 86dvh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 26px 28px 28px;
+  animation: pop 0.3s var(--ease-out) both;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+.about-head {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.about-head h2 {
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--white);
+  letter-spacing: -0.024em;
+  margin: 0;
+}
+
+.icon-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--paper-dim);
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.icon-btn:hover {
+  color: var(--white);
+  border-color: var(--paper-faint);
+}
+
+.about-lead {
+  color: var(--paper);
+  font-size: 15px;
+  line-height: 1.62;
+  margin: 0 0 22px;
+}
+
+.about-facts {
+  margin: 0;
+  display: grid;
+  gap: 17px;
+}
+.about-facts dt {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--signal);
+  letter-spacing: 0.01em;
+  margin-bottom: 5px;
+}
+.about-facts dd {
+  margin: 0;
+  color: var(--paper-dim);
+  font-size: 13.8px;
+  line-height: 1.62;
+}
+
+/* ================================= footer ================================= */
+
+.footer {
+  background: var(--ink);
+  border-top: 1px solid var(--line-soft);
+  padding: 40px 24px 34px;
+}
+
+.footer-inner {
+  width: 100%;
+  max-width: var(--shell);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.footer-id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.footer-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--paper);
+  letter-spacing: -0.015em;
+}
+
+.footer-tag {
+  font-size: 12.5px;
+  color: var(--paper-faint);
+  margin-top: 1px;
+}
+
+.footer-links {
+  margin-left: auto;
+  display: flex;
+  gap: 22px;
+}
+
+.footer-links a {
+  font-size: 13px;
+  color: var(--paper-dim);
+  text-decoration: none;
+  transition: color 0.2s var(--ease);
+}
+.footer-links a:hover {
+  color: var(--signal);
+}
+
+.footer-rule {
+  width: 100%;
+  max-width: var(--shell);
+  margin: 26px auto 16px;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.footer-note {
+  width: 100%;
+  max-width: var(--shell);
+  margin: 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--paper-faint);
+  letter-spacing: 0.01em;
 }
 
 /* ============================ opening sequence ============================
    The agent arrives: the mark flies in along an angled path, settles, and the
-   workspace resolves behind it. Short by design — under two seconds.
+   page resolves behind it. Short by design.
    ========================================================================= */
 
 .opening {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 80;
   display: grid;
   place-items: center;
   background: var(--ink);
@@ -762,7 +1121,7 @@ body {
   animation: fly-in 1.05s var(--ease-out) both;
 }
 
-/* Enters low from the left, climbs, overshoots slightly, settles. */
+/* enters low from the left, climbs, overshoots slightly, settles */
 @keyframes fly-in {
   from {
     opacity: 0;
@@ -778,7 +1137,6 @@ body {
   }
 }
 
-/* the trace the mark leaves as it arrives */
 .opening-trace {
   height: 1px;
   width: 0;
@@ -799,64 +1157,102 @@ body {
   animation: rise 0.5s var(--ease-out) 0.72s both;
 }
 
-/* the workspace resolves in as the overlay clears */
 .boot {
   animation: boot 0.7s var(--ease-out) 1.35s both;
 }
 @keyframes boot {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.995);
   }
 }
 
 /* ============================== responsive ================================ */
 
-@media (max-width: 720px) {
-  .app { padding: 0 16px; }
-  .feed { padding-top: 20px; }
-  .hero-line { letter-spacing: -0.03em; max-width: none; }
-  .hero-sub { margin-bottom: 26px; font-size: 14.5px; }
+@media (max-width: 860px) {
+  .bar-inner,
+  .feed,
+  .composer-inner {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  .hero { padding: 64px 18px 80px; }
+}
+
+@media (max-width: 640px) {
+  .hero {
+    min-height: 92dvh;
+    padding: 52px 16px 64px;
+  }
+  .hero-title { letter-spacing: -0.035em; }
+  .hero-sub { margin-bottom: 28px; }
+  .hero-status { margin-bottom: 34px; }
+
+  .bar-inner,
+  .feed,
+  .composer-inner {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .feed { padding-top: 28px; }
+
+  /* the bar keeps the mark, name and status; About moves out of the way */
+  .ghost-btn { display: none; }
+  .bar-tools { gap: 10px; }
+  .agent-status-detail { display: none; }
+
   .prompts { grid-template-columns: 1fr; }
-  .header p { display: none; }
-  .status .status-text { display: none; }
   .msg-user .bubble { max-width: 92%; }
-  .body { font-size: 14.5px; }
-  .body > p:first-of-type { font-size: 15.5px; }
-  .composer-row { border-radius: var(--r); }
-  .send { padding: 9px 13px; }
+  .body { font-size: 15px; }
+  .body > p:first-of-type { font-size: 16px; }
+
+  .send { padding: 10px 13px; }
   .send .send-label { display: none; }
+
+  .footer-inner { gap: 16px; }
+  .footer-links { margin-left: 0; width: 100%; }
 }
 
 @media (max-width: 400px) {
   .composer-foot { gap: 10px; }
+  .about { padding: 20px 20px 22px; }
 }
 
 /* =========================== reduced motion ===============================
-   No flight, no travel, no pulses. State changes remain legible through
-   opacity alone, and the opening resolves almost immediately.
+   No flight, no sweep, no travel. State stays legible through colour and text
+   alone, and the opening resolves almost immediately.
    ========================================================================= */
 
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
   }
 
   .opening {
     animation: opening-out 0.01ms linear 0.4s forwards;
   }
   .opening-mark,
+  .opening-word,
   .boot,
-  .opening-word {
+  .hero-inner > * {
     animation: fade-only 0.25s linear both;
   }
   .opening-trace { display: none; }
   .rail.live::after { display: none; }
+  .scroll-cue svg { animation: none; }
+
+  /* the sweep stops travelling but still marks the working state */
+  [data-state='working'] .ring-sweep {
+    animation: none;
+    opacity: 1;
+    stroke-dasharray: none;
+    stroke: var(--signal);
+  }
 
   @keyframes fade-only {
     from { opacity: 0; }

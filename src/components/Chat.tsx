@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import About from './About';
 import AgentMark from './AgentMark';
+import AgentStatus, { type AgentState } from './AgentStatus';
+import Footer from './Footer';
 import Opening, { useIntro } from './Opening';
 import TelemetryRail, { type RailStep } from './TelemetryRail';
 
@@ -56,8 +59,13 @@ export default function Chat() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
-  const feedRef = useRef<HTMLDivElement>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  /** Brief "Ready" beat after a turn completes, then back to Connected. */
+  const [justFinished, setJustFinished] = useState(false);
+
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
   const intro = useIntro();
 
   useEffect(() => {
@@ -68,8 +76,10 @@ export default function Chat() {
       .catch(() => setHealth({ status: 'error', message: 'Could not reach the server.' }));
   }, []);
 
+  // Keep the newest message in view. The page scrolls, not an inner pane.
   useEffect(() => {
-    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' });
+    if (!messages.length) return;
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, busy]);
 
   const send = useCallback(
@@ -77,11 +87,15 @@ export default function Chat() {
       const q = text.trim();
       if (!q || busy) return; // empty input and double-submit guard
 
+      // Asking from the hero should carry you into the workspace.
+      workspaceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
       const startedAt = Date.now();
       const history = [...messages, { role: 'user' as const, content: q }];
       setMessages([...history, { role: 'assistant', content: '', steps: [], startedAt }]);
       setInput('');
       setBusy(true);
+      setJustFinished(false);
       if (taRef.current) taRef.current.style.height = 'auto';
 
       const patch = (fn: (m: Message) => Message) =>
@@ -149,6 +163,8 @@ export default function Chat() {
       } finally {
         patch((m) => ({ ...m, totalSeconds: Math.round((Date.now() - startedAt) / 1000) }));
         setBusy(false);
+        setJustFinished(true);
+        setTimeout(() => setJustFinished(false), 2600);
       }
     },
     [busy, messages],
@@ -169,77 +185,119 @@ export default function Chat() {
   const configured = health?.status === 'ok';
   const notConfigured = health?.status === 'not_configured';
   const empty = messages.length === 0;
+  const turnStart = messages.length ? messages[messages.length - 1].startedAt ?? null : null;
+
+  const agentState: AgentState = busy
+    ? 'working'
+    : !health
+      ? 'connecting'
+      : notConfigured
+        ? 'setup'
+        : !configured
+          ? 'offline'
+          : justFinished
+            ? 'ready'
+            : 'connected';
+
+  const records = configured ? (
+    <>
+      {health.boards?.deals.usableRecords ?? 0} deals · {health.boards?.workOrders.usableRecords ?? 0}{' '}
+      work orders
+    </>
+  ) : null;
 
   return (
     <>
       <Opening playing={intro} />
+      <About open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
-      <div className={`app${intro ? ' boot' : ''}`}>
-        <header className="header">
-          <div className="header-id">
-            <AgentMark size={26} />
-            <h1>
-              Skylark <span>Intelligence</span>
+      <div className={`page${intro ? ' boot' : ''}`}>
+        {/* ---------------------------------------------------------------- */}
+        {/* 1 — the agent introduces itself                                   */}
+        {/* ---------------------------------------------------------------- */}
+        <section className="hero" aria-labelledby="hero-title">
+          <div className="hero-inner">
+            <div className="hero-mark">
+              <AgentMark size={44} title="Skylark BI Agent" />
+            </div>
+
+            <h1 id="hero-title" className="hero-title">
+              Your business,
+              <br />
+              <em>understood</em>.
             </h1>
-          </div>
 
-          <div className="status">
-            <span
-              className={`dot ${configured ? 'live' : notConfigured ? 'warn' : health ? 'bad' : ''}`}
-            />
-            <span>
-              {!health ? (
-                'Connecting'
-              ) : configured ? (
-                <>
-                  <b>{health.boards?.deals.usableRecords ?? 0}</b> deals
-                  <span className="status-text">
-                    {' · '}
-                    <b>{health.boards?.workOrders.usableRecords ?? 0}</b> work orders
-                  </span>
-                </>
-              ) : notConfigured ? (
-                'Not configured'
-              ) : (
-                'monday.com unreachable'
-              )}
-            </span>
-          </div>
-        </header>
+            <p className="hero-sub">
+              Ask questions across your deals and work orders and get answers grounded in your live
+              business data — with the coverage behind every number.
+            </p>
 
-        <main className="feed" ref={feedRef}>
-          {notConfigured && (
-            <div className="banner setup" role="status">
-              <strong>Setup required</strong>
-              This deployment is missing{' '}
-              {health.missingEnvVars?.map((v, i) => (
-                <span key={v}>
-                  {i > 0 && ', '}
-                  <code>{v}</code>
+            <div className="hero-status">
+              <AgentStatus state={agentState} startedAt={turnStart} detail={records} size={34} />
+            </div>
+
+            <a className="scroll-cue" href="#workspace" aria-label="Go to the workspace">
+              <span>Ask Skylark</span>
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                <path
+                  d="M6 1v9M2.5 6.5L6 10l3.5-3.5"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </a>
+          </div>
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* 2 — the intelligence workspace                                    */}
+        {/* ---------------------------------------------------------------- */}
+        <section className="workspace" id="workspace" ref={workspaceRef} aria-label="Skylark workspace">
+          <header className="bar">
+            <div className="bar-inner">
+              <div className="bar-id">
+                <AgentMark size={22} />
+                <span className="bar-name">
+                  Skylark <span>Intelligence</span>
                 </span>
-              ))}
-              . Set them in the hosting environment and redeploy — see the README.
-            </div>
-          )}
-          {health?.status === 'error' && (
-            <div className="banner error" role="status">
-              <strong>Cannot reach monday.com</strong>
-              {health.message}
-            </div>
-          )}
+              </div>
 
-          {empty ? (
-            <div className="hero stagger">
-              <h2 className="hero-line">
-                Your business, <em>understood</em>.
-              </h2>
-              <p className="hero-sub">
-                Ask across your deals and work orders in plain language. Every figure is computed in
-                code from live monday.com data — and comes with what it was based on, so you can see
-                where the numbers are thin.
-              </p>
-              <div>
-                <div className="prompts-label">Start with one of these</div>
+              <div className="bar-tools">
+                <AgentStatus state={agentState} startedAt={turnStart} detail={records} size={26} />
+                <button className="ghost-btn" onClick={() => setAboutOpen(true)}>
+                  About
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <div className="feed">
+            {notConfigured && (
+              <div className="banner setup" role="status">
+                <strong>Skylark is not connected to a data source yet</strong>
+                This deployment is missing{' '}
+                {health.missingEnvVars?.map((v, i) => (
+                  <span key={v}>
+                    {i > 0 && ', '}
+                    <code>{v}</code>
+                  </span>
+                ))}
+                . Set them in the hosting environment and redeploy.
+              </div>
+            )}
+            {health?.status === 'error' && (
+              <div className="banner error" role="status">
+                <strong>Skylark could not reach its data source</strong>
+                {health.message}
+              </div>
+            )}
+
+            {empty ? (
+              <div className="starter">
+                <h2 className="starter-title">What would you like to know?</h2>
                 <div className="prompts">
                   {PROMPTS.map((p) => (
                     <button
@@ -248,121 +306,126 @@ export default function Chat() {
                       onClick={() => void send(p.q)}
                       disabled={busy}
                     >
-                      {p.q}
-                      <small>{p.hint}</small>
+                      <span className="prompt-q">{p.q}</span>
+                      <span className="prompt-hint">{p.hint}</span>
                     </button>
                   ))}
                 </div>
               </div>
-            </div>
-          ) : (
-            messages.map((m, i) =>
-              m.role === 'user' ? (
-                <div key={i} className="msg msg-user">
-                  <div className="bubble">{m.content}</div>
-                </div>
-              ) : (
-                <div key={i} className="msg msg-agent">
-                  <TelemetryRail
-                    steps={m.steps ?? []}
-                    running={busy && i === messages.length - 1}
-                    startedAt={m.startedAt ?? null}
-                    totalSeconds={m.totalSeconds ?? null}
-                    hasAnswer={!!m.content}
-                  />
+            ) : (
+              messages.map((m, i) =>
+                m.role === 'user' ? (
+                  <div key={i} className="msg msg-user">
+                    <div className="bubble">{m.content}</div>
+                  </div>
+                ) : (
+                  <div key={i} className="msg msg-agent">
+                    <TelemetryRail
+                      steps={m.steps ?? []}
+                      running={busy && i === messages.length - 1}
+                      startedAt={m.startedAt ?? null}
+                      totalSeconds={m.totalSeconds ?? null}
+                      hasAnswer={!!m.content}
+                    />
 
-                  {m.error && (
-                    <div className="banner error" role="alert">
-                      <strong>Something went wrong</strong>
-                      {m.error}
-                    </div>
-                  )}
+                    {m.error && (
+                      <div className="banner error" role="alert">
+                        <strong>Something went wrong</strong>
+                        {m.error}
+                      </div>
+                    )}
 
-                  {m.content && (
-                    <div className="body">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          table: ({ children }) => (
-                            <div className="table-wrap" tabIndex={0} role="group">
-                              <table>{children}</table>
-                            </div>
-                          ),
-                          strong: ({ children }) => {
-                            const t = textOf(children);
-                            return (
-                              <strong className={FIGURE.test(t) ? 'metric' : undefined}>
-                                {children}
-                              </strong>
-                            );
-                          },
-                          a: ({ children }) => <>{children}</>,
-                        }}
-                      >
-                        {m.content}
-                      </ReactMarkdown>
-                    </div>
-                  )}
-                </div>
-              ),
-            )
-          )}
-        </main>
-
-        <div className="composer">
-          <div className="composer-row">
-            <textarea
-              ref={taRef}
-              rows={1}
-              value={input}
-              aria-label="Ask a business question"
-              placeholder="Ask about pipeline, sectors, delivery or risk…"
-              onChange={(e) => {
-                setInput(e.target.value);
-                autosize(e.target);
-              }}
-              onKeyDown={onKeyDown}
-              disabled={busy}
-            />
-            <button
-              className="send"
-              onClick={() => void send(input)}
-              disabled={busy || !input.trim()}
-              aria-label={busy ? 'Working' : 'Send question'}
-            >
-              <span className="send-label">{busy ? 'Working' : 'Ask'}</span>
-              <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true">
-                <path
-                  d="M1 7h11M8 3l4 4-4 4"
-                  stroke="currentColor"
-                  strokeWidth="1.7"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-          </div>
-
-          <div className="composer-foot">
-            {!empty && (
-              <button
-                className="linkish"
-                onClick={() => {
-                  setMessages([]);
-                  setInput('');
-                  taRef.current?.focus();
-                }}
-                disabled={busy}
-              >
-                New conversation
-              </button>
+                    {m.content && (
+                      <div className="body">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            table: ({ children }) => (
+                              <div className="table-wrap" tabIndex={0} role="group">
+                                <table>{children}</table>
+                              </div>
+                            ),
+                            strong: ({ children }) => {
+                              const t = textOf(children);
+                              return (
+                                <strong className={FIGURE.test(t) ? 'metric' : undefined}>
+                                  {children}
+                                </strong>
+                              );
+                            },
+                            a: ({ children }) => <>{children}</>,
+                          }}
+                        >
+                          {m.content}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+                  </div>
+                ),
+              )
             )}
-            <span className="foot-note">
-              Read-only · every figure computed in code
-            </span>
+            <div ref={endRef} />
           </div>
-        </div>
+
+          <div className="composer">
+            <div className="composer-inner">
+              <div className="composer-row">
+              <textarea
+                ref={taRef}
+                rows={1}
+                value={input}
+                aria-label="Ask a business question"
+                placeholder="Ask about pipeline, sectors, delivery or risk…"
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  autosize(e.target);
+                }}
+                onKeyDown={onKeyDown}
+                disabled={busy}
+              />
+              <button
+                className="send"
+                onClick={() => void send(input)}
+                disabled={busy || !input.trim()}
+                aria-label={busy ? 'Working' : 'Send question'}
+              >
+                <span className="send-label">{busy ? 'Working' : 'Ask'}</span>
+                <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true">
+                  <path
+                    d="M1 7h11M8 3l4 4-4 4"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+
+              <div className="composer-foot">
+                {!empty && (
+                  <button
+                    className="linkish"
+                    onClick={() => {
+                      // Clears client state only; nothing is persisted, so a
+                      // new conversation cannot inherit the previous context.
+                      setMessages([]);
+                      setInput('');
+                      taRef.current?.focus();
+                    }}
+                    disabled={busy}
+                  >
+                    New conversation
+                  </button>
+                )}
+                <span className="foot-note">Read-only · every figure computed in code</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <Footer />
       </div>
     </>
   );

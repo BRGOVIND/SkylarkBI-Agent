@@ -24,11 +24,25 @@ const mono = IBM_Plex_Mono({
   display: 'swap',
 });
 
+const TITLE = 'Skylark Intelligence — business intelligence agent';
+const DESCRIPTION =
+  'Ask questions across your deals and work orders and get answers grounded in live monday.com data, with the coverage behind every number.';
+
 export const metadata: Metadata = {
-  title: 'Skylark Intelligence',
-  description:
-    'Ask across your deals and work orders. Every figure is computed from live monday.com data.',
+  title: TITLE,
+  description: DESCRIPTION,
+  applicationName: 'Skylark BI Agent',
   icons: { icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }] },
+  openGraph: {
+    title: TITLE,
+    description: DESCRIPTION,
+    siteName: 'Skylark BI Agent',
+    type: 'website',
+    images: [{ url: '/agent-mark.svg', width: 100, height: 100, alt: 'Skylark BI Agent' }],
+  },
+  twitter: { card: 'summary', title: TITLE, description: DESCRIPTION },
+  // A private evaluation deployment reading live business data — keep it out
+  // of search indexes.
   robots: { index: false, follow: false },
 };
 
