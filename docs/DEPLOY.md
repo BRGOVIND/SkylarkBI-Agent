@@ -243,6 +243,58 @@ rejected.
 
 ---
 
+## 9b. Uploaded datasets
+
+Skylark can analyse spreadsheets a user uploads, in addition to the monday.com
+boards. Nothing extra needs configuring for this to work — but it is worth
+understanding what it does and does not do on Vercel.
+
+### Storage: there isn't any
+
+An upload is parsed by `POST /api/datasets` and the resulting snapshot is
+returned to the browser, which holds it for the session and sends it back with
+each question. **No uploaded data is written to a server, a disk or a
+database.** That is why no storage credential is needed, and why closing the tab
+clears the data.
+
+The trade-off is a size ceiling: the snapshot travels in every chat request, and
+Vercel caps a request body at about 4.5 MB.
+
+### Limits
+
+All optional — the defaults are sensible for a Vercel deployment.
+
+| Variable | Default | What it caps |
+|---|---|---|
+| `MAX_UPLOAD_MB` | `8` | Uploaded file size |
+| `MAX_ROWS` | `20000` | Data rows read |
+| `MAX_COLUMNS` | `60` | Columns read |
+| `MAX_SNAPSHOT_MB` | `1.5` | **Parsed snapshot — the binding limit** |
+| `MAX_DATASETS` | `5` | Datasets loaded at once |
+
+`MAX_SNAPSHOT_MB` is the one that actually protects the request, and it is
+checked after parsing because that is when the true cost is known. A 3 MB CSV of
+short strings can outgrow a 6 MB spreadsheet once parsed. Raising it above
+roughly 3 MB risks exceeding Vercel's body limit once the conversation is
+included.
+
+### Runtime
+
+`/api/datasets` runs on the Node runtime with `maxDuration = 60`, which is
+ample: parsing a 20,000-row file takes well under a second. It is the chat
+route, not the upload route, that approaches the timeout.
+
+### Supported formats
+
+CSV and TSV are parsed with papaparse; XLSX, XLS and ODS with SheetJS.
+
+SheetJS is installed **from `cdn.sheetjs.com`, not npm** — the npm build (0.18.5)
+has unfixed prototype-pollution and ReDoS advisories, and 0.20.3 from the vendor
+CDN fixes both (`npm audit` reports zero vulnerabilities). This means builds
+depend on that CDN being reachable. If a build ever fails resolving it, pin a
+vendored copy rather than falling back to the npm build, which would reintroduce
+both advisories on untrusted input.
+
 ## 10. Rotating a compromised key
 
 Assume a key is compromised if it has ever been pasted into a chat, a commit, a
