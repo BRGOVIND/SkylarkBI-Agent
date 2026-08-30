@@ -41,6 +41,8 @@ const has = (name: string) => process.argv.includes(`--${name}`);
 const DRY_RUN = has('dry-run');
 const INSPECT = has('inspect');
 const ALLOW_UNMATCHED = has('allow-unmatched');
+/** Opt-in removal of monday.com's own empty sample rows. Never automatic. */
+const DELETE_PLACEHOLDERS = has('delete-placeholders');
 const ONLY = arg('only');
 
 const TOKEN = process.env.MONDAY_API_TOKEN?.trim();
@@ -358,12 +360,36 @@ async function resolveBoard(
 
 /* ----------------------------- reconciliation ----------------------------- */
 
+/**
+ * monday.com creates every new board with one sample item ("Task 1"). It is
+ * not ours and not in the spreadsheets, so it surfaces as an unrecognised row.
+ *
+ * The allowance below is deliberately narrow. A row is only treated as a
+ * placeholder when its name matches monday.com's default naming AND it carries
+ * no data in any mapped column — a real record always has at least one value.
+ * Anything else unrecognised still stops the import.
+ */
+const PLACEHOLDER_NAME = /^(task|item|subitem)\s*\d+$/i;
+
+function isKnownPlaceholder(
+  item: { name: string; values: Record<string, string | null> },
+  columns: BoardHandle['columns'],
+): boolean {
+  if (!PLACEHOLDER_NAME.test(item.name.trim())) return false;
+  for (const header of columns.keys()) {
+    if ((item.values[header] ?? '').trim() !== '') return false;
+  }
+  return true;
+}
+
 interface Reconciliation {
   boardItems: number;
   matched: number;
   pending: PlannedRow[];
   /** Board items that correspond to no remaining source row. */
   unmatched: Array<{ id: string; name: string }>;
+  /** monday.com's own empty sample rows — reported, but not treated as unknown. */
+  placeholders: Array<{ id: string; name: string }>;
 }
 
 /**
@@ -404,16 +430,52 @@ function reconcile(planned: PlannedRow[], board: RawBoard, columns: BoardHandle[
   }
 
   const unmatched: Array<{ id: string; name: string }> = [];
+  const placeholders: Array<{ id: string; name: string }> = [];
   for (const [fp, left] of remaining) {
     if (left <= 0) continue;
     const ids = boardCounts.get(fp) ?? [];
     for (const id of ids.slice(ids.length - left)) {
       const item = board.items.find((i) => i.id === id);
-      unmatched.push({ id, name: item?.name ?? id });
+      const entry = { id, name: item?.name ?? id };
+      if (item && isKnownPlaceholder(item, columns)) placeholders.push(entry);
+      else unmatched.push(entry);
     }
   }
 
-  return { boardItems: board.items.length, matched, pending, unmatched };
+  return { boardItems: board.items.length, matched, pending, unmatched, placeholders };
+}
+
+/**
+ * Read-only provenance lookup for rows we cannot account for. Creation time and
+ * creator are what actually distinguish a monday.com-generated sample row from
+ * something a person or another integration added.
+ */
+async function describeItems(
+  client: MondayClient,
+  ids: string[],
+): Promise<Array<{ id: string; name: string; createdAt: string | null; creator: string | null; group: string | null }>> {
+  if (!ids.length) return [];
+  const res = await client.query<{
+    items: Array<{
+      id: string;
+      name: string;
+      created_at: string | null;
+      creator: { name: string } | null;
+      group: { title: string } | null;
+    }> | null;
+  }>(
+    `query($ids: [ID!]) {
+       items(ids: $ids) { id name created_at creator { name } group { title } }
+     }`,
+    { ids: ids.slice(0, 10) },
+  );
+  return (res.items ?? []).map((i) => ({
+    id: i.id,
+    name: i.name,
+    createdAt: i.created_at,
+    creator: i.creator?.name ?? null,
+    group: i.group?.title ?? null,
+  }));
 }
 
 /* ------------------------------- insertion -------------------------------- */
@@ -532,10 +594,42 @@ async function processDataset(client: MondayClient, ds: Dataset, write: boolean)
   console.log(`  rows on board      ${rec.boardItems}`);
   console.log(`  already imported   ${rec.matched}`);
   console.log(`  still to import    ${rec.pending.length}`);
+
+  if (rec.placeholders.length) {
+    console.log(
+      `  placeholder rows   ${rec.placeholders.length}  (monday.com's own empty sample row — ignored)`,
+    );
+    for (const p of rec.placeholders) console.log(`      · ${p.name} (item ${p.id})`);
+  }
   if (rec.unmatched.length) {
     console.log(`  unrecognised rows  ${rec.unmatched.length}  <-- on the board but not in the sheet`);
     for (const u of rec.unmatched.slice(0, 5)) console.log(`      · ${u.name} (item ${u.id})`);
     if (rec.unmatched.length > 5) console.log(`      · …and ${rec.unmatched.length - 5} more`);
+  }
+
+  // Provenance for anything we could not account for, so its origin can be
+  // judged from facts rather than guessed at.
+  const oddIds = [...rec.placeholders, ...rec.unmatched].map((x) => x.id);
+  if (oddIds.length) {
+    const details = await describeItems(client, oddIds);
+    if (details.length) {
+      console.log('  provenance:');
+      for (const d of details) {
+        console.log(
+          `      · "${d.name}" (${d.id}) created ${d.createdAt ?? 'unknown'}` +
+            ` by ${d.creator ?? 'monday.com (no creator recorded)'}` +
+            ` in group "${d.group ?? '?'}"`,
+        );
+      }
+    }
+  }
+
+  if (DELETE_PLACEHOLDERS && rec.placeholders.length) {
+    for (const p of rec.placeholders) {
+      await client.unsafeMutate(`mutation($id: ID!) { delete_item(item_id: $id) { id } }`, { id: p.id });
+      console.log(`  deleted placeholder "${p.name}" (item ${p.id})`);
+      await sleep(300);
+    }
   }
 
   if (!write) return board.id;

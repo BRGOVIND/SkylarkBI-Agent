@@ -258,6 +258,17 @@ function planRow(name: string, raw: Record<string, string>): Row {
   return { name: canonicalName(name), cells, fp: fingerprint(name, [...cells]) };
 }
 
+/** Mirrors the placeholder rule in the seeding script. */
+const PLACEHOLDER_NAME = /^(task|item|subitem)\s*\d+$/i;
+
+function isKnownPlaceholder(item: Item): boolean {
+  if (!PLACEHOLDER_NAME.test(item.name.trim())) return false;
+  for (const header of COLUMNS.keys()) {
+    if ((item.values[header] ?? '').trim() !== '') return false;
+  }
+  return true;
+}
+
 function reconcile(planned: Row[], items: Item[]) {
   const boardCounts = new Map<string, string[]>();
   for (const item of items) {
@@ -279,10 +290,16 @@ function reconcile(planned: Row[], items: Item[]) {
     } else pending.push(row);
   }
   const unmatched: string[] = [];
+  const placeholders: string[] = [];
   for (const [fp, left] of remaining) {
-    if (left > 0) unmatched.push(...(boardCounts.get(fp) ?? []).slice(-left));
+    if (left <= 0) continue;
+    for (const id of (boardCounts.get(fp) ?? []).slice(-left)) {
+      const item = items.find((i) => i.id === id)!;
+      if (isKnownPlaceholder(item)) placeholders.push(id);
+      else unmatched.push(id);
+    }
   }
-  return { matched, pending, unmatched };
+  return { matched, pending, unmatched, placeholders };
 }
 
 const asItem = (id: string, name: string, v: Record<string, string | null>): Item => ({
@@ -420,6 +437,93 @@ describe('duplicate source rows survive a resume', () => {
         'Created Date': '2025-11-27',
       });
     expect(reconcile(planned, [mk('i1'), mk('i2')]).pending).toEqual([]);
+  });
+});
+
+describe("monday.com's default placeholder row", () => {
+  const row = planRow('Naruto', { 'Deal Status': 'Open', 'Masked Deal value': '489360' });
+  const empty = { 'Deal Status': null, 'Masked Deal value': null, 'Created Date': null };
+
+  it('recognises the empty "Task 1" row monday.com creates with a new board', () => {
+    const r = reconcile([row], [asItem('2848283277', 'Task 1', empty)]);
+    expect(r.placeholders).toEqual(['2848283277']);
+    expect(r.unmatched).toEqual([]); // does not block the import
+    expect(r.pending).toHaveLength(1); // the real row is still pending
+  });
+
+  it('recognises the other default names monday.com uses', () => {
+    for (const name of ['Item 1', 'Task 2', 'Subitem 1', 'task 1', 'Item  3']) {
+      expect(isKnownPlaceholder(asItem('x', name, empty))).toBe(true);
+    }
+  });
+
+  // The safety check must stay narrow: these are the ways it could be weakened.
+  it('does NOT treat a placeholder-named row carrying data as a placeholder', () => {
+    const withData = asItem('x', 'Task 1', { ...empty, 'Deal Status': 'Open' });
+    expect(isKnownPlaceholder(withData)).toBe(false);
+    const r = reconcile([row], [withData]);
+    expect(r.unmatched).toEqual(['x']); // still blocks
+    expect(r.placeholders).toEqual([]);
+  });
+
+  it('does NOT treat an arbitrary empty row as a placeholder', () => {
+    const ghost = asItem('g', 'Ghost Deal', empty);
+    expect(isKnownPlaceholder(ghost)).toBe(false);
+    expect(reconcile([row], [ghost]).unmatched).toEqual(['g']);
+  });
+
+  it('does NOT match names that merely resemble the default pattern', () => {
+    for (const name of ['Task 1 - urgent', 'Tasks 1', 'My Task 1', 'Task', 'Task one']) {
+      expect(isKnownPlaceholder(asItem('x', name, empty))).toBe(false);
+    }
+  });
+
+  it('still blocks when a genuine unknown row accompanies a placeholder', () => {
+    const r = reconcile([row], [
+      asItem('p', 'Task 1', empty),
+      asItem('g', 'Ghost Deal', { ...empty, 'Masked Deal value': '99' }),
+    ]);
+    expect(r.placeholders).toEqual(['p']);
+    expect(r.unmatched).toEqual(['g']);
+  });
+
+  it('never diverts a real source row into the placeholder bucket', () => {
+    // A source row named "Task 1" would be matched normally, never skipped.
+    const taskRow = planRow('Task 1', { 'Deal Status': 'Open' });
+    const r = reconcile([taskRow], [asItem('i1', 'Task 1', { ...empty, 'Deal Status': 'Open' })]);
+    expect(r.matched).toBe(1);
+    expect(r.pending).toEqual([]);
+    expect(r.placeholders).toEqual([]);
+    expect(r.unmatched).toEqual([]);
+  });
+});
+
+describe('the real board 5030964935 state', () => {
+  it('reproduces the observed 21 imported / 1 placeholder / 325 pending split', () => {
+    const rows = Array.from({ length: 346 }, (_, i) =>
+      planRow(`Deal ${i}`, { 'Deal Status': 'Open', 'Masked Deal value': String(i) }),
+    );
+    const items: Item[] = rows.slice(0, 21).map((r, i) =>
+      asItem(`i${i}`, r.name, {
+        'Deal Status': r.cells.get('Deal Status') ?? null,
+        'Masked Deal value': r.cells.get('Masked Deal value') ?? null,
+        'Created Date': r.cells.get('Created Date') ?? null,
+      }),
+    );
+    items.push(
+      asItem('2848283277', 'Task 1', {
+        'Deal Status': null,
+        'Masked Deal value': null,
+        'Created Date': null,
+      }),
+    );
+
+    const r = reconcile(rows, items);
+    expect(items).toHaveLength(22); // matches "rows on board: 22"
+    expect(r.matched).toBe(21); // matches "already imported: 21"
+    expect(r.pending).toHaveLength(325); // matches "still to import: 325"
+    expect(r.placeholders).toEqual(['2848283277']);
+    expect(r.unmatched).toEqual([]); // no longer blocks
   });
 });
 
