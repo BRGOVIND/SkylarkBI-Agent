@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "seed:monday": "tsx scripts/seed-monday.ts",
     "check:monday": "tsx scripts/check-monday.ts",
-    "smoke:llm": "tsx scripts/smoke-llm.ts"
+    "smoke:llm": "tsx scripts/smoke-llm.ts",
+    "gemini:models": "tsx scripts/list-gemini-models.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

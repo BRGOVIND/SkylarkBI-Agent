@@ -270,9 +270,14 @@ describe('Gemini error handling', () => {
 
   it('names the model on a 404', async () => {
     const f = vi.fn().mockResolvedValue(errorRes(404, 'models/nope is not found'));
-    await expect(provider(f as unknown as typeof fetch).complete(base)).rejects.toThrow(
-      /gemini-2\.5-flash" was not found/,
-    );
+    const err = await provider(f as unknown as typeof fetch)
+      .complete(base)
+      .then(() => null)
+      .catch((e: Error) => e);
+    expect(err!.message).toMatch(/gemini-2\.5-flash" was not found/);
+    // The message must point at the listing tool, since model availability
+    // varies per key and guessing another name is the wrong move.
+    expect(err!.message).toMatch(/npm run gemini:models/);
   });
 
   it('handles a non-JSON response and a network failure', async () => {
@@ -353,10 +358,20 @@ describe('Gemini provider selection', () => {
     expect(() => resolveProvider({ LLM_PROVIDER: 'openai' })).toThrow(/gemini.*groq.*anthropic/i);
   });
 
-  it('defaults to gemini-2.5-flash and honours GEMINI_MODEL', () => {
-    expect(DEFAULT_MODELS.gemini).toBe('gemini-2.5-flash');
-    expect(modelFor('gemini', {})).toBe('gemini-2.5-flash');
-    expect(modelFor('gemini', { GEMINI_MODEL: 'gemini-2.5-pro' })).toBe('gemini-2.5-pro');
+  it('honours GEMINI_MODEL over the default', () => {
+    expect(modelFor('gemini', {})).toBe(DEFAULT_MODELS.gemini);
+    expect(modelFor('gemini', { GEMINI_MODEL: 'gemini-3.7-flash' })).toBe('gemini-3.7-flash');
+    expect(modelFor('gemini', { GEMINI_MODEL: '  gemini-3.5-flash  ' })).toBe('gemini-3.5-flash');
+  });
+
+  it('falls back to the default when GEMINI_MODEL is blank', () => {
+    expect(modelFor('gemini', { GEMINI_MODEL: '   ' })).toBe(DEFAULT_MODELS.gemini);
+  });
+
+  it('does not let another provider’s model variable bleed through', () => {
+    expect(modelFor('gemini', { GROQ_MODEL: 'openai/gpt-oss-120b', ANTHROPIC_MODEL: 'claude-x' })).toBe(
+      DEFAULT_MODELS.gemini,
+    );
   });
 
   it('requires only the Gemini key — no Groq or Anthropic key needed', () => {
@@ -378,6 +393,57 @@ describe('Gemini provider selection', () => {
     process.env.MONDAY_DEALS_BOARD_ID = '1';
     process.env.MONDAY_WORK_ORDERS_BOARD_ID = '2';
     expect(configStatus().missing).toEqual(['GEMINI_API_KEY']);
+  });
+
+  it('carries an overridden GEMINI_MODEL end to end into the request body', async () => {
+    // env -> resolveProvider/modelFor -> factory -> adapter -> HTTP body.
+    process.env.LLM_PROVIDER = 'gemini';
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.GEMINI_MODEL = 'gemini-3.7-flash';
+
+    const p = resolveProvider();
+    const m = modelFor(p);
+    expect(m).toBe('gemini-3.7-flash');
+
+    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
+    const adapter = new GeminiProvider({
+      apiKey: 'k',
+      model: m,
+      fetchImpl: f as unknown as typeof fetch,
+      maxAttempts: 1,
+    });
+    expect(adapter.model).toBe('gemini-3.7-flash');
+
+    await adapter.complete(base);
+    const body = JSON.parse(f.mock.calls[0][1].body as string);
+    expect(body.model).toBe('gemini-3.7-flash');
+  });
+
+  it('sends whatever model id it is given verbatim, with no rewriting', async () => {
+    // The compat endpoint takes bare ids; we must not add or strip a
+    // "models/" prefix, which is what caused the 404 hunt.
+    for (const id of ['gemini-3.7-flash', 'gemini-2.5-flash-lite', 'models/gemini-3.5-flash']) {
+      const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
+      await new GeminiProvider({
+        apiKey: 'k',
+        model: id,
+        fetchImpl: f as unknown as typeof fetch,
+        maxAttempts: 1,
+      }).complete(base);
+      expect(JSON.parse(f.mock.calls[0][1].body as string).model).toBe(id);
+    }
+  });
+
+  it('names the configured model in the 404 so a bad id is self-diagnosing', async () => {
+    const f = vi.fn().mockResolvedValue(errorRes(404, 'models/gemini-9 is not found'));
+    await expect(
+      new GeminiProvider({
+        apiKey: 'k',
+        model: 'gemini-9-flash',
+        fetchImpl: f as unknown as typeof fetch,
+        maxAttempts: 1,
+      }).complete(base),
+    ).rejects.toThrow(/Gemini model "gemini-9-flash" was not found \(404\)/);
   });
 
   it('the factory builds a Gemini adapter behind the neutral interface', () => {

@@ -110,6 +110,23 @@ cheaper than a router plus an executor.
 
 Check your live limits with `npm run smoke:llm -- --probe` (one minimal request).
 
+### Choosing a Gemini model
+
+Gemini model availability differs by API key, project and region — an id listed
+in Google's public docs is not guaranteed to resolve for a given key, and a
+missing one surfaces as a 404. To find what a key can actually use:
+
+```bash
+npm run gemini:models              # list, with context sizes and chat support
+npm run gemini:models -- --verify  # also make one real tool-calling request
+```
+
+It ranks candidates for this agent (Flash-class preferred: Pro has tighter free
+-tier quotas, Lite gives up the instruction following the caveat rules rely on),
+prints the exact `GEMINI_MODEL=` line to set, and can prove tool calling works
+against the real adapter before you change anything. The key travels in a
+header, never a URL, and is never printed.
+
 Switching is two environment variables — no code change:
 
 ```bash
@@ -245,7 +262,7 @@ The boards created by the seed script use the source spreadsheet headers verbati
 ## Testing
 
 ```bash
-npm test          # 237 tests
+npm test          # 242 tests
 npm run typecheck
 ```
 

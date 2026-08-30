@@ -180,8 +180,12 @@ export class GeminiProvider implements LlmProvider {
     }
 
     if (res.status === 404) {
+      // Model availability varies by key, project and region, so the fix is to
+      // ask Google what this key can reach rather than try another name.
       throw new LlmError(
-        `Gemini model "${this.model}" was not found (404). Check GEMINI_MODEL.${detail ? ` ${detail}` : ''}`,
+        `Gemini model "${this.model}" was not found (404). Check GEMINI_MODEL. ` +
+          `Run "npm run gemini:models" to list the models available to this API key.` +
+          (detail ? ` ${detail}` : ''),
         this.providerName,
         404,
       );

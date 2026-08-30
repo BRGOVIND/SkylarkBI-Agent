@@ -53,6 +53,21 @@ Then verify the model end to end against the live boards:
 npm run smoke:llm
 ```
 
+### If Gemini returns a 404 on the model
+
+Model availability varies by API key, project and region, so the fix is to ask
+Google what your key can reach rather than trying another name:
+
+```powershell
+npm run gemini:models              # list models available to this key
+npm run gemini:models -- --verify  # also prove tool calling works
+```
+
+It prints a recommended model and the exact `GEMINI_MODEL=` line to set. The
+key is sent in a header, never in a URL, and is never printed.
+
+### Verifying the provider
+
 First confirm the key, model and endpoint work — one minimal request:
 
 ```powershell
