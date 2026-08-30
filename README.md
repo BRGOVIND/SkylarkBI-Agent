@@ -97,19 +97,26 @@ npm install
 **Create the boards.** Either import the two spreadsheets through monday.com's UI, or use the included script:
 
 ```bash
-# Preview the column-type plan without writing anything
-npx tsx scripts/seed-monday.ts \
-  --deals "Deal funnel Data.xlsx" \
-  --work-orders "Work_Order_Tracker Data.xlsx" \
-  --dry-run
+# Column-type plan only — no network, no token
+npx tsx scripts/seed-monday.ts --dry-run
 
-# Actually create both boards (needs a write-scoped token)
-MONDAY_API_TOKEN=xxx npx tsx scripts/seed-monday.ts \
-  --deals "Deal funnel Data.xlsx" \
-  --work-orders "Work_Order_Tracker Data.xlsx"
+# Read-only status: which boards exist and how many rows are already imported
+npx tsx scripts/seed-monday.ts --inspect
+
+# Create or resume both boards (needs a write-scoped token)
+npx tsx scripts/seed-monday.ts
 ```
 
 The script prints the two board IDs when it finishes. It uploads the data **verbatim** — blanks, duplicates and all — because cleaning it at import would defeat the point of the exercise.
+
+**It is resumable and idempotent.** monday.com rate-limits aggressively and a 346-row import will usually be interrupted at least once. Re-running the same command is always safe:
+
+- **Boards are reused, never duplicated** — resolved by explicit `--deals-board` / `--work-orders-board` id, then the environment, then an exact board-name match, and only created if none of those find one. Missing columns are added to an existing board; existing ones are reused.
+- **Already-imported rows are detected by content**, not by position. Each row is fingerprinted from its item name plus every canonicalised column value, and source rows are matched against board items as a *multiset*. So if the sheet holds three identical rows and the board holds one, exactly two are still pending — the 12 genuine duplicate rows in the source data survive a resume intact.
+- **Rate limits are absorbed** — the seeder honours monday.com's `Retry-After` header and the "retry in N seconds" text inside complexity errors, backs off exponentially up to 75s, retries a bounded 8 times, and adaptively widens the spacing between mutations so a long import settles at the fastest rate the API will tolerate.
+- **It refuses to write into a board it cannot account for.** If any board row matches no source row, the script stops and reports those rows rather than risking duplicates. Override with `--allow-unmatched` once you have checked them.
+
+Useful flags: `--only deals` / `--only work-orders` to do one board at a time, `--delay <ms>` to set the base spacing between mutations (default 400).
 
 > The seed script is manual setup tooling. It is not part of the deployed app and is unreachable from it. The running agent uses `MondayClient.query`, which **refuses any GraphQL mutation outright**.
 

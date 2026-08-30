@@ -11,20 +11,24 @@ credentials that must come from you — they cannot be provisioned from source.
 
 ## Step 1 — create the monday.com boards
 
-```bash
-# Preview the column plan (no writes, no token needed)
-npx tsx scripts/seed-monday.ts \
-  --deals "Deal funnel Data.xlsx" \
-  --work-orders "Work_Order_Tracker Data.xlsx" \
-  --dry-run
+```powershell
+$env:MONDAY_API_TOKEN = "<your token>"
 
-# Create the boards (needs a write-scoped token)
-MONDAY_API_TOKEN=xxx npx tsx scripts/seed-monday.ts \
-  --deals "Deal funnel Data.xlsx" \
-  --work-orders "Work_Order_Tracker Data.xlsx"
+# Read-only: what exists and how much is already imported
+npx tsx scripts/seed-monday.ts --inspect
+
+# Create or resume both boards
+npx tsx scripts/seed-monday.ts
 ```
 
 It prints both board IDs on completion.
+
+The import is **resumable**: monday.com rate-limits aggressively, so a run may
+stop partway. Re-running the same command reuses the existing boards and
+inserts only the rows that are genuinely missing — matched by content, not by
+position — so duplicate boards and duplicate rows cannot occur. Run
+`--inspect` any time for a read-only progress report, and `--only deals` /
+`--only work-orders` to import one board at a time.
 
 ## Step 2 — verify locally
 
