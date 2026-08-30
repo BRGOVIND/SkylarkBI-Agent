@@ -1,4 +1,10 @@
 import type { ToolSpec } from './provider';
+import {
+  DATASET_TOOL_DEFINITIONS,
+  DATASET_TOOL_NAMES,
+  runDatasetTool,
+} from './dataset-tools';
+import type { DatasetSnapshot } from '../datasets/types';
 import { loadBusinessData, snapshotAgeSeconds } from '../data';
 import {
   crossBoardAnalysis,
@@ -179,6 +185,17 @@ export const TOOL_DEFINITIONS: ToolSpec[] = [
   },
 ];
 
+/**
+ * The full surface: the monday.com board tools above, plus the tools for any
+ * datasets the user uploaded. Uploaded-data tools are always declared so the
+ * agent can tell the user none are loaded, rather than silently lacking the
+ * vocabulary to discuss them.
+ */
+export const ALL_TOOL_DEFINITIONS: ToolSpec[] = [
+  ...TOOL_DEFINITIONS,
+  ...DATASET_TOOL_DEFINITIONS,
+];
+
 /* ------------------------------- Execution -------------------------------- */
 
 type Json = Record<string, unknown>;
@@ -194,7 +211,18 @@ export interface ToolRunResult {
   label: string;
 }
 
-export async function runTool(name: string, input: Json): Promise<ToolRunResult> {
+export async function runTool(
+  name: string,
+  input: Json,
+  /** Datasets uploaded in this session. Empty for a monday.com-only turn. */
+  datasets: DatasetSnapshot[] = [],
+): Promise<ToolRunResult> {
+  // Uploaded data is held by the browser and arrives with the request, so it
+  // never touches monday.com and needs no board fetch.
+  if (DATASET_TOOL_NAMES.has(name)) {
+    return runDatasetTool(name, input, datasets);
+  }
+
   const data = await loadBusinessData();
   const age = snapshotAgeSeconds(data);
   const freshness = { snapshotFetchedAt: data.fetchedAt, snapshotAgeSeconds: age };

@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
 import { runAgent, type ChatTurn } from '@/lib/agent/run';
+import { LIMITS } from '@/lib/datasets/limits';
+import type { DatasetSnapshot } from '@/lib/datasets/types';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -14,7 +16,7 @@ const MAX_CHARS = 4000;
  * client only ever sees rendered text and tool labels.
  */
 export async function POST(req: NextRequest) {
-  let body: { messages?: unknown };
+  let body: { messages?: unknown; datasets?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -47,12 +49,46 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'The last message must be from the user.' }, { status: 400 });
   }
 
+  /**
+   * Datasets are held by the browser and returned with each question. They are
+   * shape-checked rather than trusted: a malformed snapshot is dropped instead
+   * of reaching the query engine.
+   */
+  const datasets: DatasetSnapshot[] = [];
+  if (body.datasets !== undefined) {
+    if (!Array.isArray(body.datasets)) {
+      return Response.json({ error: 'datasets must be an array.' }, { status: 400 });
+    }
+    if (body.datasets.length > LIMITS.datasets) {
+      return Response.json(
+        { error: `At most ${LIMITS.datasets} datasets can be active at once.` },
+        { status: 400 },
+      );
+    }
+    for (const d of body.datasets) {
+      const snap = d as Partial<DatasetSnapshot>;
+      if (
+        !snap ||
+        typeof snap !== 'object' ||
+        typeof snap.id !== 'string' ||
+        typeof snap.name !== 'string' ||
+        typeof snap.rowCount !== 'number' ||
+        !Array.isArray(snap.columns) ||
+        !snap.data ||
+        typeof snap.data !== 'object'
+      ) {
+        return Response.json({ error: 'A dataset was malformed.' }, { status: 400 });
+      }
+      datasets.push(snap as DatasetSnapshot);
+    }
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       try {
-        for await (const event of runAgent(history)) send(event);
+        for await (const event of runAgent(history, undefined, datasets)) send(event);
       } catch (err) {
         send({
           type: 'error',

@@ -98,10 +98,11 @@ describe('agent loop (provider-neutral)', () => {
     expect(events.map((e) => e.type)).toEqual(['text', 'done']);
   });
 
-  it('passes the system prompt and all nine tools to the provider', async () => {
+  it('passes the system prompt and every tool to the provider', async () => {
     const p = scripted([{ text: ['ok'], toolCalls: [] }]);
     await collect(runAgent([{ role: 'user', content: 'hi' }], p));
-    expect(p.seen[0].tools).toHaveLength(9);
+    // Nine monday.com tools plus three for uploaded datasets.
+    expect(p.seen[0].tools).toHaveLength(12);
     expect(p.seen[0].system).toMatch(/never compute, estimate, or adjust a number yourself/i);
   });
 
@@ -109,7 +110,9 @@ describe('agent loop (provider-neutral)', () => {
     const p = scripted([{ text: ['ok'], toolCalls: [] }]);
     await collect(runAgent([{ role: 'user', content: 'pipeline?' }], p));
     const last = p.seen[0].messages.at(-1) as { text: string };
-    expect(last.text).toMatch(/\[Context: today is \d{4}-\d{2}-\d{2}\.\]/);
+    expect(last.text).toMatch(/\[Context: today is \d{4}-\d{2}-\d{2}\./);
+    // With nothing uploaded the agent is told so explicitly.
+    expect(last.text).toMatch(/No uploaded datasets/);
   });
 
   it('executes a requested tool against the real analytics and feeds the result back', async () => {

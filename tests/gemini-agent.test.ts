@@ -281,14 +281,15 @@ describe('Gemini — founder scenarios end to end', () => {
     expect(responses).toEqual(['get_pipeline_metrics', 'get_operational_metrics']);
   });
 
-  it('sends the system instruction and all nine tools on every request', async () => {
+  it('sends the system instruction and every tool on every request', async () => {
     const r = await ask('How is our pipeline?', [
       geminiToolCall('get_pipeline_metrics'),
       geminiText('Done.'),
     ]);
     expect(r.bodies).toHaveLength(2);
     for (const b of r.bodies) {
-      expect(b.tools![0].functionDeclarations).toHaveLength(9);
+      // Nine monday.com tools plus three for uploaded datasets.
+      expect(b.tools![0].functionDeclarations).toHaveLength(12);
       expect(b.systemInstruction.parts[0].text).toMatch(
         /never compute, estimate, or adjust a number yourself/i,
       );

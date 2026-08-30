@@ -1,9 +1,10 @@
 import { loadConfig } from '../config';
 import { SYSTEM_PROMPT, contextPreamble } from './prompt';
-import { TOOL_DEFINITIONS, runTool } from './tools';
+import { ALL_TOOL_DEFINITIONS, runTool } from './tools';
 import { describeError } from '../data';
 import { createProvider } from './factory';
 import { LlmError, type AgentMessage, type LlmProvider } from './provider';
+import type { DatasetSnapshot } from '../datasets/types';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -31,12 +32,25 @@ const MAX_TOKENS = 4096;
 export async function* runAgent(
   history: ChatTurn[],
   injected?: LlmProvider,
+  /** Datasets uploaded in this session; empty means monday.com only. */
+  datasets: DatasetSnapshot[] = [],
 ): AsyncGenerator<AgentEvent> {
   let provider: LlmProvider;
   try {
     provider = injected ?? createProvider(loadConfig());
   } catch (err) {
-    yield { type: 'error', ...describeError(err) };
+    const e = describeError(err);
+    // A misconfigured deployment is an operator problem, not the reader's. They
+    // get a plain statement; the variable names stay server-side, where
+    // /api/health already reports them precisely.
+    yield {
+      type: 'error',
+      kind: e.kind,
+      message:
+        e.kind === 'config'
+          ? 'Skylark is not connected to its business data yet. The required configuration is missing from the hosting environment.'
+          : e.message,
+    };
     return;
   }
 
@@ -45,7 +59,9 @@ export async function* runAgent(
       return {
         role: 'user',
         text:
-          i === history.length - 1 ? `${contextPreamble(new Date())}\n\n${t.content}` : t.content,
+          i === history.length - 1
+            ? `${contextPreamble(new Date(), datasets)}\n\n${t.content}`
+            : t.content,
       };
     }
     return { role: 'assistant', text: t.content, toolCalls: [] };
@@ -56,7 +72,7 @@ export async function* runAgent(
     try {
       turn = await provider.complete({
         system: SYSTEM_PROMPT,
-        tools: TOOL_DEFINITIONS,
+        tools: ALL_TOOL_DEFINITIONS,
         messages,
         maxTokens: MAX_TOKENS,
       });
@@ -74,9 +90,17 @@ export async function* runAgent(
       return;
     }
 
-    for (const text of turn.text) {
-      if (text.trim()) yield { type: 'text', text };
-    }
+    /**
+     * Parts are pieces of ONE answer, not separate paragraphs.
+     *
+     * A provider may split its response at any byte boundary — including the
+     * middle of a markdown token. Joining the pieces with a blank line breaks
+     * the token, and the reader is shown the fragment literally (a table
+     * followed by a stray "**Er"). They are concatenated exactly as sent, and
+     * emitted as a single event so the client has nothing to reassemble.
+     */
+    const answer = turn.text.join('');
+    if (answer.trim()) yield { type: 'text', text: answer };
 
     if (turn.toolCalls.length === 0) {
       yield { type: 'done' };
@@ -85,7 +109,9 @@ export async function* runAgent(
 
     messages.push({
       role: 'assistant',
-      text: turn.text.join('\n\n'),
+      // The same reassembled answer the user saw, so the history the model is
+      // shown next round matches what was actually said.
+      text: answer,
       toolCalls: turn.toolCalls,
     });
 
@@ -111,7 +137,7 @@ export async function* runAgent(
       let isError = false;
       let label = call.name;
       try {
-        const out = await runTool(call.name, call.input);
+        const out = await runTool(call.name, call.input, datasets);
         label = out.label;
         payload = JSON.stringify(out.result);
       } catch (err) {
