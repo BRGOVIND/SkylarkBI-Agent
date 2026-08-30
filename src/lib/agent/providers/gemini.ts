@@ -42,6 +42,8 @@ const BASE = 'https://generativelanguage.googleapis.com/v1beta';
 interface GeminiFunctionCall {
   name?: string;
   args?: Record<string, unknown>;
+  thoughtSignature?: string;
+  thought_signature?: string;
 }
 
 interface GeminiPart {
@@ -49,6 +51,8 @@ interface GeminiPart {
   functionCall?: GeminiFunctionCall;
   functionResponse?: { name: string; response: Record<string, unknown> };
   thought?: boolean;
+  thoughtSignature?: string;
+  thought_signature?: string;
 }
 
 interface GeminiContent {
@@ -160,9 +164,20 @@ export function toGeminiContents(messages: AgentMessage[]): GeminiContent[] {
     } else if (m.role === 'assistant') {
       const parts: GeminiPart[] = [];
       if (m.text) parts.push({ text: m.text });
-      for (const tc of m.toolCalls) {
-        parts.push({ functionCall: { name: tc.name, args: tc.input ?? {} } });
-      }
+for (const tc of m.toolCalls) {
+  const thoughtSignature =
+    typeof tc.providerMetadata?.thoughtSignature === 'string'
+      ? tc.providerMetadata.thoughtSignature
+      : undefined;
+
+  parts.push({
+  functionCall: {
+    name: tc.name,
+    args: tc.input ?? {},
+  },
+  ...(thoughtSignature ? { thoughtSignature } : {}),
+});
+}
       if (parts.length) contents.push({ role: 'model', parts });
       pendingCallOrder = m.toolCalls.map((tc) => ({ id: tc.id, name: tc.name }));
     } else {
@@ -387,13 +402,19 @@ export class GeminiProvider implements LlmProvider {
       if (part.thought) continue;
       if (typeof part.text === 'string' && part.text.trim()) textOut.push(part.text);
       if (part.functionCall) {
-        // Positional id — see the correlation note at the top of this file.
-        toolCalls.push({
-          id: `call_${toolCalls.length}`,
-          name: part.functionCall.name ?? '',
-          input: (part.functionCall.args ?? {}) as Record<string, unknown>,
-        });
-      }
+  const thoughtSignature =
+    part.thoughtSignature ??
+    part.thought_signature;
+
+  toolCalls.push({
+    id: `call_${toolCalls.length}`,
+    name: part.functionCall.name ?? '',
+    input: (part.functionCall.args ?? {}) as Record<string, unknown>,
+    ...(thoughtSignature
+      ? { providerMetadata: { thoughtSignature } }
+      : {}),
+  });
+}
     }
 
     if (candidate.finishReason === 'MALFORMED_FUNCTION_CALL') {

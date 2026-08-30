@@ -20,10 +20,13 @@ export interface ToolCall {
   id: string;
   name: string;
   input: Record<string, unknown>;
+
   /**
-   * Set when the model emitted arguments that were not valid JSON. The caller
-   * feeds this back as a tool error rather than executing with a guess.
+   * Provider-specific opaque metadata that must survive an
+   * assistant tool-call round trip. Gemini uses this for its
+   * thought signature. Other providers leave it undefined.
    */
+  providerMetadata?: Record<string, unknown>;
   parseError?: string;
 }
 
