@@ -68,7 +68,9 @@ interface Sheet {
  */
 function readSheet(file: string): Sheet {
   if (!fs.existsSync(file)) throw new Error(`File not found: ${path.resolve(file)}`);
-  const wb = XLSX.readFile(file, { cellDates: false });
+  // xlsx's ESM build does not wire up `fs`, so read the bytes here and
+  // hand them over rather than relying on XLSX.readFile.
+  const wb = XLSX.read(fs.readFileSync(file), { type: 'buffer', cellDates: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const grid = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, blankrows: false, raw: false });
 
