@@ -67,7 +67,7 @@ The agent needs exactly one thing from a model vendor: **multi-turn tool calling
 | Model | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `claude-sonnet-4-5` |
 | Cost | Free tier | Free tier | Paid |
 | Tool calling | Yes | Yes | Yes |
-| Integration | OpenAI-compat endpoint | Native | Official SDK |
+| Integration | Native generateContent | Native | Official SDK |
 
 Selecting one is two environment variables — no code change:
 
@@ -79,22 +79,38 @@ GEMINI_API_KEY=...
 **Only the selected provider's key is required.** If `LLM_PROVIDER` is omitted,
 the first key present is used, in the order gemini -> groq -> anthropic.
 
-### Why Gemini uses the OpenAI-compatibility endpoint
+### Why Gemini uses the native API
 
-Google offers both a native SDK (`@google/genai`) and an OpenAI-compatible
-endpoint. This adapter uses the latter, for one specific reason: the **native
-Gemini API pairs a function response to its call by function *name*** —
-`functionCall`/`functionResponse` parts carry no call id. This agent's neutral
-interface pairs by id, which is what keeps two parallel calls to the *same*
-tool (two sector queries with different filters, say) unambiguous. Adapting the
-native shape would mean synthesising ids and re-associating them by name and
-position — a correctness risk exactly where a BI agent can least afford one.
+Google offers a native `generateContent` API and an OpenAI-compatibility
+endpoint. This adapter uses the **native** one. The compatibility endpoint's
+model list returned nothing usable for the project we tested — 39 chat-capable
+models were visible natively while the compat list matched none of them — so
+the first-class API is both the working and the better-supported choice.
 
-The compatibility endpoint speaks the same `tool_calls` / `tool_call_id`
-dialect the neutral interface already models, needs no new dependency, and
-shares its translation code with the Groq adapter (`providers/openai-wire.ts`).
-It is documented as beta; because it sits behind the adapter, switching to the
-native SDK later would touch one file.
+**Tool-call correlation.** Native Gemini carries no call identifier:
+`FunctionCall` is `{name, args}` and `FunctionResponse` is `{name, response}`.
+Correlating by name alone would be unsafe — two parallel calls to the same tool
+with different arguments would be indistinguishable. The adapter instead
+correlates by **position**, which the wire format does preserve:
+
+1. Gemini returns `functionCall` parts as an ordered array within one model
+   turn; each is given a positional id (`call_0`, `call_1`, …) at decode time.
+2. When history is replayed, the assistant turn and its results both carry
+   those ids, so `functionResponse` parts are emitted in exactly the order of
+   the calls they answer — restoring wire order even if results arrived
+   reordered.
+3. A call with no matching result becomes an explicit error response rather
+   than a silent misalignment; an orphan result is appended, never dropped.
+
+Position is a stronger correlator than name, and the reconstruction is
+deterministic, so the tool-result pairing guarantee is preserved rather than
+weakened. `tests/gemini.test.ts` asserts this directly, including the decisive
+case: the same tool called twice with different arguments, results supplied
+reversed.
+
+Tool JSON Schemas are converted to Gemini's OpenAPI subset — types upper-cased,
+unsupported keywords dropped, and `parameters` omitted entirely for
+no-argument tools (Gemini rejects an `OBJECT` with empty properties).
 
 ### Token footprint
 
@@ -262,7 +278,7 @@ The boards created by the seed script use the source spreadsheet headers verbati
 ## Testing
 
 ```bash
-npm test          # 242 tests
+npm test          # 247 tests
 npm run typecheck
 ```
 
@@ -273,8 +289,8 @@ Coverage is concentrated on the parts that can produce a wrong business answer:
 | `tests/normalize.test.ts` | Date/number parsing across every format in the source data, null-sentinel handling, missing-vs-malformed, sector/stage/status canonicalisation, duplicate and header-echo removal, column resolution |
 | `tests/analytics.test.ts` | Pipeline/sector/operational maths, coverage accounting, weighted pipeline, win-rate edge cases, risk rules, cross-board join, empty-period explanation, division-by-zero |
 | `tests/monday.test.ts` | Mutation refusal, 401/429/5xx handling, retry policy, malformed JSON, network failure, pagination, missing board, empty board |
-| `tests/gemini.test.ts` | Gemini request shape, tool-call decoding, parallel and same-tool calls, quota/404/auth errors, key never leaving the Authorization header, provider selection |
-| `tests/gemini-agent.test.ts` | All six founder scenarios end to end through a real GeminiProvider with stubbed fetch: tool selection, deterministic figures reaching the model intact, coverage and caveat propagation, cross-board join |
+| `tests/gemini.test.ts` | Native endpoint and auth header, JSON-Schema-to-Gemini conversion, positional tool-call correlation (including the same tool twice with reversed results, missing results, and orphan results), multi-round history, quota/404/blocked/MAX_TOKENS errors, provider selection |
+| `tests/gemini-agent.test.ts` | All six founder scenarios end to end through a real native GeminiProvider with stubbed fetch: tool selection, deterministic figures reaching the model intact, coverage and caveat propagation, cross-board join, parallel calls |
 | `tests/provider.test.ts` | Tool-schema translation to both vendor formats, message/tool-result encoding, argument parsing, Groq auth/rate-limit/network errors, provider selection |
 | `tests/agent-loop.test.ts` | The full agent loop against real analytics with a scripted provider: tool selection, tool-result feedback, parallel calls, cross-board queries, caveat propagation, round cap |
 | `tests/pipeline-fixture.test.ts` | **End-to-end against the real supplied spreadsheets** — every column resolves, zero malformed dates or values, sector totals reconcile with pipeline totals, duplicates and header rows removed |

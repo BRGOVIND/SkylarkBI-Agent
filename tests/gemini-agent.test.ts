@@ -5,9 +5,10 @@ import type { BusinessDataset, NormalizedDeal, NormalizedWorkOrder } from '@/lib
  * The founder-level BI scenarios, driven end to end through a REAL
  * GeminiProvider whose only stub is `fetch`.
  *
- * This exercises the whole path: agent loop -> Gemini adapter -> OpenAI wire
- * translation -> tool execution against the real deterministic analytics ->
- * results translated back to Gemini -> final answer. No API key is used.
+ * This exercises the whole path: agent loop -> native Gemini adapter ->
+ * generateContent translation -> tool execution against the real deterministic
+ * analytics -> functionResponse parts translated back -> final answer.
+ * No API key is used.
  *
  * The assertions focus on what actually matters for correctness: that the
  * figures reaching the model are the ones TypeScript computed, and that
@@ -79,16 +80,13 @@ const { GeminiProvider } = await import('@/lib/agent/providers/gemini');
 
 /* --------------------------- Gemini response stubs ------------------------- */
 
-const geminiToolCall = (name: string, args: Record<string, unknown> = {}, id = 'c1') =>
+const geminiToolCall = (name: string, args: Record<string, unknown> = {}) =>
   new Response(
     JSON.stringify({
-      choices: [
+      candidates: [
         {
-          message: {
-            content: null,
-            tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
-          },
-          finish_reason: 'tool_calls',
+          content: { role: 'model', parts: [{ functionCall: { name, args } }] },
+          finishReason: 'STOP',
         },
       ],
     }),
@@ -97,7 +95,9 @@ const geminiToolCall = (name: string, args: Record<string, unknown> = {}, id = '
 
 const geminiText = (content: string) =>
   new Response(
-    JSON.stringify({ choices: [{ message: { content, tool_calls: [] }, finish_reason: 'stop' }] }),
+    JSON.stringify({
+      candidates: [{ content: { role: 'model', parts: [{ text: content }] }, finishReason: 'STOP' }],
+    }),
     { status: 200, headers: { 'Content-Type': 'application/json' } },
   );
 
@@ -107,7 +107,11 @@ const geminiText = (content: string) =>
  * body the adapter sent, so we can inspect what the model actually received.
  */
 async function ask(question: string, responses: Response[]) {
-  const bodies: Array<{ messages: Array<Record<string, unknown>>; tools: unknown[] }> = [];
+  const bodies: Array<{
+    contents: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+    tools?: Array<{ functionDeclarations: unknown[] }>;
+    systemInstruction: { parts: Array<{ text: string }> };
+  }> = [];
   let i = 0;
   const fetchImpl = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
     bodies.push(JSON.parse(init.body as string));
@@ -126,10 +130,15 @@ async function ask(question: string, responses: Response[]) {
     events.push(e as { type: string; [k: string]: unknown });
   }
 
-  /** The tool payload the model was given back, parsed. */
-  const toolResult = (n = 0) => {
-    const msgs = bodies.at(-1)!.messages.filter((m) => (m as { role: string }).role === 'tool');
-    return JSON.parse((msgs[n] as { content: string }).content);
+  /**
+   * The tool payload the model was given back. In the native API this is a
+   * functionResponse part whose `response` is already a struct.
+   */
+  const toolResult = (n = 0): Record<string, any> => {
+    const last = bodies.at(-1)!;
+    const parts = last.contents.flatMap((c) => c.parts).filter((p) => 'functionResponse' in p);
+    return (parts[n] as { functionResponse: { response: Record<string, any> } }).functionResponse
+      .response;
   };
 
   return {
@@ -243,15 +252,16 @@ describe('Gemini — founder scenarios end to end', () => {
   it('multi-tool turn: two tools in one round, both results returned', async () => {
     const twoCalls = new Response(
       JSON.stringify({
-        choices: [
+        candidates: [
           {
-            message: {
-              content: null,
-              tool_calls: [
-                { id: 'a', type: 'function', function: { name: 'get_pipeline_metrics', arguments: '{}' } },
-                { id: 'b', type: 'function', function: { name: 'get_operational_metrics', arguments: '{}' } },
+            content: {
+              role: 'model',
+              parts: [
+                { functionCall: { name: 'get_pipeline_metrics', args: {} } },
+                { functionCall: { name: 'get_operational_metrics', args: {} } },
               ],
             },
+            finishReason: 'STOP',
           },
         ],
       }),
@@ -262,9 +272,13 @@ describe('Gemini — founder scenarios end to end', () => {
     expect(r.toolResult(0).openPipelineValue).toBe(5_000_000);
     expect(r.toolResult(1).orderBookValue).toBe(3_500_000);
 
-    // Each result must be paired to the call that produced it.
-    const toolMsgs = r.bodies.at(-1)!.messages.filter((m) => (m as { role: string }).role === 'tool');
-    expect(toolMsgs.map((m) => (m as { tool_call_id: string }).tool_call_id)).toEqual(['a', 'b']);
+    // Each response must sit in the same position as the call it answers.
+    const responses = r.bodies
+      .at(-1)!
+      .contents.flatMap((c) => c.parts)
+      .filter((p) => 'functionResponse' in p)
+      .map((p) => (p as { functionResponse: { name: string } }).functionResponse.name);
+    expect(responses).toEqual(['get_pipeline_metrics', 'get_operational_metrics']);
   });
 
   it('sends the system instruction and all nine tools on every request', async () => {
@@ -274,9 +288,8 @@ describe('Gemini — founder scenarios end to end', () => {
     ]);
     expect(r.bodies).toHaveLength(2);
     for (const b of r.bodies) {
-      expect(b.tools).toHaveLength(9);
-      expect((b.messages[0] as { role: string; content: string }).role).toBe('system');
-      expect((b.messages[0] as { content: string }).content).toMatch(
+      expect(b.tools![0].functionDeclarations).toHaveLength(9);
+      expect(b.systemInstruction.parts[0].text).toMatch(
         /never compute, estimate, or adjust a number yourself/i,
       );
     }
@@ -300,7 +313,6 @@ describe('Gemini — founder scenarios end to end', () => {
       geminiText('That is not something I can look up.'),
     ]);
     expect(r.events.at(-1)!.type).toBe('done');
-    const msgs = r.bodies.at(-1)!.messages.filter((m) => (m as { role: string }).role === 'tool');
-    expect((msgs[0] as { content: string }).content).toMatch(/Unknown tool/);
+    expect(JSON.stringify(r.toolResult())).toMatch(/Unknown tool/);
   });
 });

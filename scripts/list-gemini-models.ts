@@ -59,8 +59,10 @@ async function listNative(): Promise<NativeModel[]> {
 }
 
 /**
- * The OpenAI-compatibility endpoint's own model list. This is authoritative for
- * what our adapter can pass as `model`, because that is the endpoint it calls.
+ * The OpenAI-compatibility endpoint's model list. Informational only — the
+ * adapter now uses the NATIVE generateContent API, so a model missing here is
+ * still perfectly usable. (This list came back empty of gemini-* ids for the
+ * project we tested, which is exactly why the adapter moved to native.)
  */
 async function listCompat(): Promise<string[]> {
   const res = await fetch(COMPAT_MODELS, { headers: { Authorization: `Bearer ${KEY}` } });
@@ -168,21 +170,19 @@ async function main() {
     .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
   console.log(`Models visible to this key: ${native.length} total, ${chatModels.length} chat-capable\n`);
-  console.log(`${'model id'.padEnd(42)} ${'context'.padStart(9)} ${'out'.padStart(7)}  compat  chat`);
+  console.log(`${'model id'.padEnd(42)} ${'context'.padStart(9)} ${'out'.padStart(7)}  native  compat`);
   console.log('─'.repeat(80));
   for (const r of rows) {
     const compatMark = r.onCompat === null ? '  ?   ' : r.onCompat ? '  yes ' : '  no  ';
-    const chat = r.methods.includes('generateContent') ? 'yes' : 'no';
+    const native = r.methods.includes('generateContent') ? ' yes  ' : ' no   ';
     console.log(
-      `${r.id.padEnd(42)} ${String(r.inTok).padStart(9)} ${String(r.outTok).padStart(7)}  ${compatMark}  ${chat}`,
+      `${r.id.padEnd(42)} ${String(r.inTok).padStart(9)} ${String(r.outTok).padStart(7)}  ${native}  ${compatMark}`,
     );
   }
 
-  // Recommend only among models the compat endpoint will actually accept,
-  // since that is the endpoint this adapter calls.
-  const eligible = rows.filter(
-    (r) => r.score > 0 && r.methods.includes('generateContent') && r.onCompat !== false,
-  );
+  // Eligibility is based on NATIVE generateContent support, which is what the
+  // adapter uses. The compat column is shown for information only.
+  const eligible = rows.filter((r) => r.score > 0 && r.methods.includes('generateContent'));
 
   console.log('\n' + '═'.repeat(80));
   if (!eligible.length) {

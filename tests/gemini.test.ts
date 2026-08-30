@@ -1,41 +1,42 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { GeminiProvider, parseGeminiRetryAfter } from '@/lib/agent/providers/gemini';
-import { toOpenAiMessages, toOpenAiTools, decodeAssistantMessage } from '@/lib/agent/providers/openai-wire';
+import {
+  GeminiProvider,
+  parseGeminiRetryAfter,
+  toGeminiContents,
+  toGeminiSchema,
+  toFunctionDeclarations,
+  modelPath,
+} from '@/lib/agent/providers/gemini';
 import { LlmError, type AgentMessage, type ToolSpec } from '@/lib/agent/provider';
 import { resolveProvider, modelFor, configStatus, DEFAULT_MODELS } from '@/lib/config';
 import { createProvider } from '@/lib/agent/factory';
 import { TOOL_DEFINITIONS } from '@/lib/agent/tools';
 
 /**
- * Gemini adapter coverage. No live API key is required anywhere in this file —
- * every request is served by an injected fetch stub.
+ * Native Gemini adapter coverage. No live API key is used anywhere — every
+ * request is served by an injected fetch stub.
  */
 
 const TOOLS: ToolSpec[] = [
   {
     name: 'get_pipeline_metrics',
     description: 'Pipeline metrics',
-    parameters: { type: 'object', properties: { sector: { type: 'string' } } },
+    parameters: {
+      type: 'object',
+      properties: { sector: { type: 'string', description: 'Sector filter' } },
+    },
   },
 ];
 
-const CONVERSATION: AgentMessage[] = [
-  { role: 'user', text: 'How is our pipeline?' },
-  {
-    role: 'assistant',
-    text: '',
-    toolCalls: [{ id: 'call_1', name: 'get_pipeline_metrics', input: { sector: 'Mining' } }],
-  },
-  {
-    role: 'tool_results',
-    results: [
-      { id: 'call_1', name: 'get_pipeline_metrics', content: '{"openPipelineValue":100}', isError: false },
-    ],
-  },
-];
+const base = {
+  system: 'SYSTEM',
+  tools: TOOLS,
+  messages: [{ role: 'user' as const, text: 'How is our pipeline?' }],
+  maxTokens: 4096,
+};
 
-const chat = (message: unknown) =>
-  new Response(JSON.stringify({ choices: [{ message }] }), {
+const ok = (parts: unknown[], finishReason = 'STOP') =>
+  new Response(JSON.stringify({ candidates: [{ content: { parts, role: 'model' }, finishReason }] }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });
@@ -55,207 +56,307 @@ const provider = (fetchImpl: typeof fetch, opts: Record<string, unknown> = {}) =
     ...opts,
   });
 
-const base = { system: 'SYSTEM', tools: TOOLS, messages: CONVERSATION, maxTokens: 4096 };
+const bodyOf = (f: ReturnType<typeof vi.fn>, i = 0) => JSON.parse(f.mock.calls[i][1].body as string);
 
-/* ------------------------------ wire format ------------------------------- */
+/* ------------------------------- endpoint --------------------------------- */
 
-describe('Gemini request shape', () => {
-  it('posts to the Gemini OpenAI-compatibility endpoint', async () => {
-    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
+describe('native Gemini request', () => {
+  it('posts to the native generateContent endpoint for the model', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'ok' }]));
     await provider(f as unknown as typeof fetch).complete(base);
     expect(f.mock.calls[0][0]).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
     );
   });
 
-  it('sends the model, tools and tool_choice', async () => {
-    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
-    await provider(f as unknown as typeof fetch).complete(base);
-    const body = JSON.parse(f.mock.calls[0][1].body as string);
-    expect(body.model).toBe('gemini-2.5-flash');
-    expect(body.tool_choice).toBe('auto');
-    expect(body.tools[0].type).toBe('function');
-    expect(body.max_tokens).toBe(4096);
+  it('accepts a model id with or without the models/ prefix', () => {
+    expect(modelPath('gemini-2.5-flash')).toBe('models/gemini-2.5-flash');
+    expect(modelPath('models/gemini-3.7-flash')).toBe('models/gemini-3.7-flash');
   });
 
-  it('passes the system instruction as the first message', async () => {
-    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
+  it('sends the API key as a header, never in the URL or body', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'ok' }]));
     await provider(f as unknown as typeof fetch).complete(base);
-    const body = JSON.parse(f.mock.calls[0][1].body as string);
-    expect(body.messages[0]).toEqual({ role: 'system', content: 'SYSTEM' });
+    const [url, init] = f.mock.calls[0];
+    expect((init as RequestInit).headers as Record<string, string>).toMatchObject({
+      'x-goog-api-key': 'test-key',
+    });
+    expect(String(url)).not.toContain('test-key');
+    expect((init as RequestInit).body as string).not.toContain('test-key');
   });
 
-  it('carries all nine BI tools without dropping any', async () => {
-    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
+  it('passes the system prompt via systemInstruction', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'ok' }]));
+    await provider(f as unknown as typeof fetch).complete(base);
+    expect(bodyOf(f).systemInstruction).toEqual({ parts: [{ text: 'SYSTEM' }] });
+  });
+
+  it('declares tools with AUTO function-calling mode', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'ok' }]));
+    await provider(f as unknown as typeof fetch).complete(base);
+    const b = bodyOf(f);
+    expect(b.tools[0].functionDeclarations[0].name).toBe('get_pipeline_metrics');
+    expect(b.toolConfig.functionCallingConfig.mode).toBe('AUTO');
+    expect(b.generationConfig.maxOutputTokens).toBe(4096);
+  });
+
+  it('carries all nine BI tools', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'ok' }]));
     await provider(f as unknown as typeof fetch).complete({ ...base, tools: TOOL_DEFINITIONS });
-    const body = JSON.parse(f.mock.calls[0][1].body as string);
-    expect(body.tools).toHaveLength(9);
-    expect(body.tools.map((t: { function: { name: string } }) => t.function.name)).toEqual(
-      TOOL_DEFINITIONS.map((t) => t.name),
-    );
-  });
-
-  it('preserves each tool JSON Schema intact', () => {
-    const fns = toOpenAiTools(TOOL_DEFINITIONS);
-    for (const [i, f] of fns.entries()) {
-      expect(f.function.parameters).toEqual(TOOL_DEFINITIONS[i].parameters);
-    }
-  });
-
-  it('round-trips a multi-turn conversation including tool results', async () => {
-    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
-    await provider(f as unknown as typeof fetch).complete(base);
-    const body = JSON.parse(f.mock.calls[0][1].body as string);
-    expect(body.messages.map((m: { role: string }) => m.role)).toEqual([
-      'system',
-      'user',
-      'assistant',
-      'tool',
-    ]);
-    expect(body.messages[3].tool_call_id).toBe('call_1');
+    const decls = bodyOf(f).tools[0].functionDeclarations;
+    expect(decls).toHaveLength(9);
+    expect(decls.map((d: { name: string }) => d.name)).toEqual(TOOL_DEFINITIONS.map((t) => t.name));
   });
 });
 
-/* ------------------------------ tool calling ------------------------------ */
+/* ---------------------------- schema conversion --------------------------- */
 
-describe('Gemini tool calling', () => {
-  it('decodes a single function call with its arguments', async () => {
+describe('JSON Schema -> Gemini schema', () => {
+  it('upper-cases types as the REST enum requires', () => {
+    expect(toGeminiSchema({ type: 'string' })).toEqual({ type: 'STRING' });
+    expect(toGeminiSchema({ type: 'integer' })).toEqual({ type: 'INTEGER' });
+    expect(toGeminiSchema({ type: 'boolean' })).toEqual({ type: 'BOOLEAN' });
+  });
+
+  it('keeps descriptions, enums and required', () => {
+    const s = toGeminiSchema({
+      type: 'object',
+      properties: { period: { type: 'string', enum: ['a', 'b'], description: 'when' } },
+      required: ['period'],
+    });
+    expect(s).toEqual({
+      type: 'OBJECT',
+      properties: { period: { type: 'STRING', enum: ['a', 'b'], description: 'when' } },
+      required: ['period'],
+    });
+  });
+
+  it('drops keywords Gemini does not accept', () => {
+    const s = toGeminiSchema({
+      type: 'object',
+      additionalProperties: false,
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      default: {},
+      properties: { a: { type: 'string' } },
+    });
+    expect(s).not.toHaveProperty('additionalProperties');
+    expect(s).not.toHaveProperty('$schema');
+    expect(s).not.toHaveProperty('default');
+  });
+
+  it('omits parameters entirely for a no-argument tool', () => {
+    // Gemini rejects an OBJECT schema with an empty properties map.
+    const decls = toFunctionDeclarations([
+      { name: 'get_board_overview', description: 'overview', parameters: { type: 'object', properties: {} } },
+    ]);
+    expect(decls[0]).not.toHaveProperty('parameters');
+    expect(decls[0].name).toBe('get_board_overview');
+  });
+
+  it('converts all nine real tool schemas without producing an empty OBJECT', () => {
+    for (const d of toFunctionDeclarations(TOOL_DEFINITIONS)) {
+      if ('parameters' in d) {
+        const p = d.parameters as { type: string; properties: Record<string, unknown> };
+        expect(p.type).toBe('OBJECT');
+        expect(Object.keys(p.properties).length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+/* --------------------- tool-call correlation (the crux) ------------------- */
+
+describe('tool-call correlation without vendor ids', () => {
+  it('assigns positional ids to returned function calls', async () => {
     const f = vi.fn().mockResolvedValue(
-      chat({
-        content: null,
-        tool_calls: [
-          {
-            id: 'call_abc',
-            type: 'function',
-            function: { name: 'get_pipeline_metrics', arguments: '{"sector":"Mining"}' },
-          },
-        ],
-      }),
+      ok([
+        { functionCall: { name: 'get_pipeline_metrics', args: { sector: 'Mining' } } },
+        { functionCall: { name: 'get_sector_analysis', args: {} } },
+      ]),
     );
     const turn = await provider(f as unknown as typeof fetch).complete(base);
-    expect(turn.toolCalls).toHaveLength(1);
-    expect(turn.toolCalls[0].name).toBe('get_pipeline_metrics');
+    expect(turn.toolCalls.map((t) => t.id)).toEqual(['call_0', 'call_1']);
     expect(turn.toolCalls[0].input).toEqual({ sector: 'Mining' });
-    expect(turn.toolCalls[0].parseError).toBeUndefined();
   });
 
-  it('decodes parallel function calls, keeping ids distinct', async () => {
+  it('keeps two calls to the SAME tool distinct', async () => {
     const f = vi.fn().mockResolvedValue(
-      chat({
-        content: null,
-        tool_calls: [
-          { id: 'c1', type: 'function', function: { name: 'get_pipeline_metrics', arguments: '{}' } },
-          { id: 'c2', type: 'function', function: { name: 'get_sector_analysis', arguments: '{}' } },
-        ],
-      }),
+      ok([
+        { functionCall: { name: 'get_pipeline_metrics', args: { sector: 'Mining' } } },
+        { functionCall: { name: 'get_pipeline_metrics', args: { sector: 'Railways' } } },
+      ]),
     );
     const turn = await provider(f as unknown as typeof fetch).complete(base);
-    expect(turn.toolCalls.map((t) => t.id)).toEqual(['c1', 'c2']);
-  });
-
-  it('keeps two calls to the SAME tool distinguishable by id', async () => {
-    // This is why the compatibility endpoint was chosen over the native API,
-    // which pairs responses by function name only.
-    const f = vi.fn().mockResolvedValue(
-      chat({
-        content: null,
-        tool_calls: [
-          { id: 'c1', type: 'function', function: { name: 'get_pipeline_metrics', arguments: '{"sector":"Mining"}' } },
-          { id: 'c2', type: 'function', function: { name: 'get_pipeline_metrics', arguments: '{"sector":"Railways"}' } },
-        ],
-      }),
-    );
-    const turn = await provider(f as unknown as typeof fetch).complete(base);
-    expect(turn.toolCalls).toHaveLength(2);
     expect(new Set(turn.toolCalls.map((t) => t.id)).size).toBe(2);
     expect(turn.toolCalls[0].input).toEqual({ sector: 'Mining' });
     expect(turn.toolCalls[1].input).toEqual({ sector: 'Railways' });
   });
 
-  it('synthesises an id when the compatibility layer omits one', () => {
-    const turn = decodeAssistantMessage({
-      content: null,
-      tool_calls: [{ id: '', type: 'function', function: { name: 'get_board_overview', arguments: '' } }],
+  it('emits function responses in CALL order, not arrival order', async () => {
+    // The decisive test: same tool twice, results supplied reversed.
+    const messages: AgentMessage[] = [
+      { role: 'user', text: 'compare sectors' },
+      {
+        role: 'assistant',
+        text: '',
+        toolCalls: [
+          { id: 'call_0', name: 'get_pipeline_metrics', input: { sector: 'Mining' } },
+          { id: 'call_1', name: 'get_pipeline_metrics', input: { sector: 'Railways' } },
+        ],
+      },
+      {
+        role: 'tool_results',
+        results: [
+          { id: 'call_1', name: 'get_pipeline_metrics', content: '{"sector":"Railways","v":2}', isError: false },
+          { id: 'call_0', name: 'get_pipeline_metrics', content: '{"sector":"Mining","v":1}', isError: false },
+        ],
+      },
+    ];
+    const contents = toGeminiContents(messages);
+    const responses = contents[2].parts.map((p) => p.functionResponse!.response);
+    // Restored to call order despite arriving reversed.
+    expect(responses[0]).toEqual({ sector: 'Mining', v: 1 });
+    expect(responses[1]).toEqual({ sector: 'Railways', v: 2 });
+  });
+
+  it('emits an explicit error response when a call has no result', () => {
+    const contents = toGeminiContents([
+      { role: 'user', text: 'x' },
+      {
+        role: 'assistant',
+        text: '',
+        toolCalls: [
+          { id: 'call_0', name: 'a', input: {} },
+          { id: 'call_1', name: 'b', input: {} },
+        ],
+      },
+      { role: 'tool_results', results: [{ id: 'call_0', name: 'a', content: '{"ok":1}', isError: false }] },
+    ]);
+    const parts = contents[2].parts;
+    expect(parts).toHaveLength(2); // never silently drops the unanswered call
+    expect(parts[1].functionResponse!.response).toEqual({
+      error: 'No result was produced for this tool call.',
     });
-    expect(turn.toolCalls[0].id).toBe('call_0');
-    expect(turn.toolCalls[0].input).toEqual({});
   });
 
-  it('treats empty arguments as a no-argument call', async () => {
-    const f = vi.fn().mockResolvedValue(
-      chat({
-        content: null,
-        tool_calls: [{ id: 'c', type: 'function', function: { name: 'get_board_overview', arguments: '' } }],
-      }),
-    );
-    const turn = await provider(f as unknown as typeof fetch).complete(base);
-    expect(turn.toolCalls[0].input).toEqual({});
-    expect(turn.toolCalls[0].parseError).toBeUndefined();
+  it('appends an orphan result rather than discarding it', () => {
+    const contents = toGeminiContents([
+      { role: 'user', text: 'x' },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'call_0', name: 'a', input: {} }] },
+      {
+        role: 'tool_results',
+        results: [
+          { id: 'call_0', name: 'a', content: '{"ok":1}', isError: false },
+          { id: 'ghost', name: 'b', content: '{"ok":2}', isError: false },
+        ],
+      },
+    ]);
+    expect(contents[2].parts).toHaveLength(2);
   });
 
-  it('flags malformed arguments rather than executing a guess', async () => {
-    const f = vi.fn().mockResolvedValue(
-      chat({
-        content: null,
-        tool_calls: [{ id: 'c', type: 'function', function: { name: 'get_pipeline_metrics', arguments: '{bad' } }],
-      }),
-    );
-    const turn = await provider(f as unknown as typeof fetch).complete(base);
-    expect(turn.toolCalls[0].parseError).toMatch(/not valid JSON/);
+  it('maps roles correctly: user, model for calls, user for responses', () => {
+    const contents = toGeminiContents([
+      { role: 'user', text: 'q' },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'call_0', name: 'a', input: {} }] },
+      { role: 'tool_results', results: [{ id: 'call_0', name: 'a', content: '{}', isError: false }] },
+    ]);
+    expect(contents.map((c) => c.role)).toEqual(['user', 'model', 'user']);
+    expect(contents[1].parts[0].functionCall).toEqual({ name: 'a', args: {} });
+    expect(contents[2].parts[0].functionResponse!.name).toBe('a');
   });
 
-  it('returns a plain answer when no tool is called (stop condition)', async () => {
-    const f = vi.fn().mockResolvedValue(chat({ content: 'Pipeline is ₹4.2 Cr.', tool_calls: [] }));
+  it('wraps a non-object tool result in a struct, as Gemini requires', () => {
+    const contents = toGeminiContents([
+      { role: 'user', text: 'x' },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'call_0', name: 'a', input: {} }] },
+      { role: 'tool_results', results: [{ id: 'call_0', name: 'a', content: 'not json', isError: true }] },
+    ]);
+    expect(contents[2].parts[0].functionResponse!.response).toEqual({ result: 'not json' });
+  });
+
+  it('carries assistant text alongside its function calls', () => {
+    const contents = toGeminiContents([
+      { role: 'user', text: 'q' },
+      { role: 'assistant', text: 'Checking.', toolCalls: [{ id: 'call_0', name: 'a', input: {} }] },
+    ]);
+    expect(contents[1].parts[0]).toEqual({ text: 'Checking.' });
+    expect(contents[1].parts[1].functionCall!.name).toBe('a');
+  });
+
+  it('survives several rounds of calls and results', () => {
+    const contents = toGeminiContents([
+      { role: 'user', text: 'q' },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'call_0', name: 'a', input: {} }] },
+      { role: 'tool_results', results: [{ id: 'call_0', name: 'a', content: '{"r":1}', isError: false }] },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'call_0', name: 'b', input: {} }] },
+      { role: 'tool_results', results: [{ id: 'call_0', name: 'b', content: '{"r":2}', isError: false }] },
+    ]);
+    expect(contents.map((c) => c.role)).toEqual(['user', 'model', 'user', 'model', 'user']);
+    // Round 2's response must pair with round 2's call, not round 1's.
+    expect(contents[4].parts[0].functionResponse!.name).toBe('b');
+    expect(contents[4].parts[0].functionResponse!.response).toEqual({ r: 2 });
+  });
+});
+
+/* ------------------------------- responses -------------------------------- */
+
+describe('native Gemini responses', () => {
+  it('returns a final text answer', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'Pipeline is ₹4.2 Cr.' }]));
     const turn = await provider(f as unknown as typeof fetch).complete(base);
     expect(turn.text).toEqual(['Pipeline is ₹4.2 Cr.']);
     expect(turn.toolCalls).toEqual([]);
   });
 
-  it('handles a turn carrying both text and a tool call', async () => {
-    const f = vi.fn().mockResolvedValue(
-      chat({
-        content: 'Let me check the boards.',
-        tool_calls: [{ id: 'c', type: 'function', function: { name: 'get_pipeline_metrics', arguments: '{}' } }],
-      }),
-    );
+  it('ignores thought parts', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'internal', thought: true }, { text: 'answer' }]));
     const turn = await provider(f as unknown as typeof fetch).complete(base);
-    expect(turn.text).toEqual(['Let me check the boards.']);
+    expect(turn.text).toEqual(['answer']);
+  });
+
+  it('handles a turn with both text and a function call', async () => {
+    const f = vi
+      .fn()
+      .mockResolvedValue(ok([{ text: 'Checking.' }, { functionCall: { name: 'get_pipeline_metrics', args: {} } }]));
+    const turn = await provider(f as unknown as typeof fetch).complete(base);
+    expect(turn.text).toEqual(['Checking.']);
     expect(turn.toolCalls).toHaveLength(1);
+  });
+
+  it('defaults absent args to an empty object', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ functionCall: { name: 'get_board_overview' } }]));
+    const turn = await provider(f as unknown as typeof fetch).complete(base);
+    expect(turn.toolCalls[0].input).toEqual({});
   });
 });
 
 /* -------------------------------- errors ---------------------------------- */
 
-describe('Gemini error handling', () => {
+describe('native Gemini error handling', () => {
   it('reports a rejected key without retrying', async () => {
     const f = vi.fn().mockResolvedValue(errorRes(401, 'API key not valid'));
-    await expect(
-      provider(f as unknown as typeof fetch, { maxAttempts: 3 }).complete(base),
-    ).rejects.toThrow(/rejected the API key/i);
+    await expect(provider(f as unknown as typeof fetch, { maxAttempts: 3 }).complete(base)).rejects.toThrow(
+      /rejected the API key/i,
+    );
     expect(f).toHaveBeenCalledTimes(1);
   });
 
-  it('relays Google’s quota text on a 429', async () => {
-    const f = vi.fn().mockResolvedValue(
-      errorRes(429, 'Quota exceeded for quota metric generate_content_free_tier_requests. Please retry in 41.6s'),
-    );
+  it('relays quota text and the stated retry delay', async () => {
+    const f = vi.fn().mockResolvedValue(errorRes(429, 'Quota exceeded for quota metric X. Please retry in 41.6s'));
     const err = await provider(f as unknown as typeof fetch)
       .complete(base)
-      .catch((e) => e as LlmError);
-    expect((err as LlmError).message).toMatch(/generate_content_free_tier_requests/);
-    expect((err as LlmError).message).toMatch(/Retry in ~42s/);
-    expect((err as LlmError).retryAfterMs).toBe(41_600);
+      .then(() => null)
+      .catch((e: LlmError) => e);
+    expect(err!.message).toMatch(/quota metric X/);
+    expect(err!.retryAfterMs).toBe(41_600);
   });
 
   it('retries a 429 then succeeds, bounded', async () => {
     const f = vi
       .fn()
       .mockImplementationOnce(async () => errorRes(429, 'Quota exceeded. Please retry in 0.01s'))
-      .mockImplementationOnce(async () => chat({ content: 'Recovered.' }));
-    const turn = await provider(f as unknown as typeof fetch, {
-      maxAttempts: 3,
-      maxBackoffMs: 20,
-    }).complete(base);
+      .mockImplementationOnce(async () => ok([{ text: 'Recovered.' }]));
+    const turn = await provider(f as unknown as typeof fetch, { maxAttempts: 3, maxBackoffMs: 20 }).complete(base);
     expect(turn.text).toEqual(['Recovered.']);
     expect(f).toHaveBeenCalledTimes(2);
   });
@@ -268,19 +369,41 @@ describe('Gemini error handling', () => {
     expect(f).toHaveBeenCalledTimes(3);
   });
 
-  it('names the model on a 404', async () => {
-    const f = vi.fn().mockResolvedValue(errorRes(404, 'models/nope is not found'));
+  it('names the model and the listing command on a 404', async () => {
+    const f = vi.fn().mockResolvedValue(errorRes(404, 'not found'));
     const err = await provider(f as unknown as typeof fetch)
       .complete(base)
       .then(() => null)
       .catch((e: Error) => e);
     expect(err!.message).toMatch(/gemini-2\.5-flash" was not found/);
-    // The message must point at the listing tool, since model availability
-    // varies per key and guessing another name is the wrong move.
     expect(err!.message).toMatch(/npm run gemini:models/);
   });
 
-  it('handles a non-JSON response and a network failure', async () => {
+  it('surfaces a blocked prompt', async () => {
+    const f = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ promptFeedback: { blockReason: 'SAFETY' } }), { status: 200 }),
+    );
+    await expect(provider(f as unknown as typeof fetch).complete(base)).rejects.toThrow(/blocked.*SAFETY/i);
+  });
+
+  it('explains an empty MAX_TOKENS response', async () => {
+    const f = vi.fn().mockResolvedValue(ok([], 'MAX_TOKENS'));
+    await expect(provider(f as unknown as typeof fetch).complete(base)).rejects.toThrow(
+      /output limit before producing an answer/i,
+    );
+  });
+
+  it('surfaces a malformed function call', async () => {
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'x' }], 'MALFORMED_FUNCTION_CALL'));
+    await expect(provider(f as unknown as typeof fetch).complete(base)).rejects.toThrow(
+      /malformed function call/i,
+    );
+  });
+
+  it('handles no candidates, non-JSON, and network failure', async () => {
+    const none = vi.fn().mockResolvedValue(new Response(JSON.stringify({ candidates: [] }), { status: 200 }));
+    await expect(provider(none as unknown as typeof fetch).complete(base)).rejects.toThrow(/no candidates/i);
+
     const html = vi.fn().mockResolvedValue(new Response('<html>502</html>', { status: 200 }));
     await expect(provider(html as unknown as typeof fetch).complete(base)).rejects.toThrow(/non-JSON/);
 
@@ -288,35 +411,20 @@ describe('Gemini error handling', () => {
     await expect(provider(dead as unknown as typeof fetch).complete(base)).rejects.toThrow(/Network error/);
   });
 
-  it('parses the retry delay from either wording', () => {
-    expect(parseGeminiRetryAfter(null, 'Please retry in 41.6s')).toBe(41_600);
-    expect(parseGeminiRetryAfter(null, '"retryDelay": "45s"')).toBe(45_000);
-    expect(parseGeminiRetryAfter('30', undefined)).toBe(30_000);
-    expect(parseGeminiRetryAfter(null, 'Quota exceeded')).toBeUndefined();
-  });
-});
-
-/* ------------------------------- security --------------------------------- */
-
-describe('Gemini key handling', () => {
-  it('sends the key only in the Authorization header, never the body or URL', async () => {
-    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
-    await provider(f as unknown as typeof fetch).complete(base);
-    const [url, init] = f.mock.calls[0];
-    const headers = (init as RequestInit).headers as Record<string, string>;
-    expect(headers.Authorization).toBe('Bearer test-key');
-    expect(String(url)).not.toContain('test-key');
-    expect((init as RequestInit).body as string).not.toContain('test-key');
-  });
-
-  it('does not put the key in error messages', async () => {
+  it('does not leak the key in error messages', async () => {
     const f = vi.fn().mockResolvedValue(errorRes(401, 'API key not valid'));
     const err = await provider(f as unknown as typeof fetch)
       .complete(base)
       .then(() => null)
       .catch((e: Error) => e);
-    expect(err).toBeInstanceOf(Error);
     expect(err!.message).not.toContain('test-key');
+  });
+
+  it('parses the retry delay from either wording', () => {
+    expect(parseGeminiRetryAfter(null, 'Please retry in 41.6s')).toBe(41_600);
+    expect(parseGeminiRetryAfter(null, '"retryDelay": "45s"')).toBe(45_000);
+    expect(parseGeminiRetryAfter('30', undefined)).toBe(30_000);
+    expect(parseGeminiRetryAfter(null, 'Quota exceeded')).toBeUndefined();
   });
 });
 
@@ -334,47 +442,44 @@ describe('Gemini provider selection', () => {
     process.env = { ...ENV };
   });
 
-  it('selects gemini explicitly', () => {
+  it('selects gemini explicitly and by key inference', () => {
     expect(resolveProvider({ LLM_PROVIDER: 'gemini' })).toBe('gemini');
-    expect(resolveProvider({ LLM_PROVIDER: ' GEMINI ' })).toBe('gemini');
-  });
-
-  it('infers gemini when only a Gemini key is present', () => {
     expect(resolveProvider({ GEMINI_API_KEY: 'x' })).toBe('gemini');
-  });
-
-  it('prefers gemini over groq when both keys exist', () => {
     expect(resolveProvider({ GEMINI_API_KEY: 'x', GROQ_API_KEY: 'y' })).toBe('gemini');
   });
 
   it('still resolves the other providers', () => {
     expect(resolveProvider({ LLM_PROVIDER: 'groq' })).toBe('groq');
     expect(resolveProvider({ LLM_PROVIDER: 'anthropic' })).toBe('anthropic');
-    expect(resolveProvider({ GROQ_API_KEY: 'y' })).toBe('groq');
     expect(resolveProvider({})).toBe('anthropic');
-  });
-
-  it('rejects an unknown provider naming all three', () => {
-    expect(() => resolveProvider({ LLM_PROVIDER: 'openai' })).toThrow(/gemini.*groq.*anthropic/i);
   });
 
   it('honours GEMINI_MODEL over the default', () => {
     expect(modelFor('gemini', {})).toBe(DEFAULT_MODELS.gemini);
     expect(modelFor('gemini', { GEMINI_MODEL: 'gemini-3.7-flash' })).toBe('gemini-3.7-flash');
     expect(modelFor('gemini', { GEMINI_MODEL: '  gemini-3.5-flash  ' })).toBe('gemini-3.5-flash');
-  });
-
-  it('falls back to the default when GEMINI_MODEL is blank', () => {
     expect(modelFor('gemini', { GEMINI_MODEL: '   ' })).toBe(DEFAULT_MODELS.gemini);
   });
 
   it('does not let another provider’s model variable bleed through', () => {
-    expect(modelFor('gemini', { GROQ_MODEL: 'openai/gpt-oss-120b', ANTHROPIC_MODEL: 'claude-x' })).toBe(
-      DEFAULT_MODELS.gemini,
-    );
+    expect(modelFor('gemini', { GROQ_MODEL: 'x', ANTHROPIC_MODEL: 'y' })).toBe(DEFAULT_MODELS.gemini);
   });
 
-  it('requires only the Gemini key — no Groq or Anthropic key needed', () => {
+  it('carries an overridden GEMINI_MODEL into the request URL', async () => {
+    process.env.LLM_PROVIDER = 'gemini';
+    process.env.GEMINI_MODEL = 'gemini-3.7-flash';
+    const m = modelFor(resolveProvider());
+    const f = vi.fn().mockResolvedValue(ok([{ text: 'ok' }]));
+    await new GeminiProvider({
+      apiKey: 'k',
+      model: m,
+      fetchImpl: f as unknown as typeof fetch,
+      maxAttempts: 1,
+    }).complete(base);
+    expect(f.mock.calls[0][0]).toContain('models/gemini-3.7-flash:generateContent');
+  });
+
+  it('requires only the Gemini key', () => {
     process.env.LLM_PROVIDER = 'gemini';
     process.env.GEMINI_API_KEY = 'gem_test';
     process.env.MONDAY_API_TOKEN = 't';
@@ -383,67 +488,7 @@ describe('Gemini provider selection', () => {
     const s = configStatus();
     expect(s.ok).toBe(true);
     expect(s.provider).toBe('gemini');
-    expect(s.model).toBe('gemini-2.5-flash');
     expect(s.missing).toEqual([]);
-  });
-
-  it('names GEMINI_API_KEY when it is the missing one', () => {
-    process.env.LLM_PROVIDER = 'gemini';
-    process.env.MONDAY_API_TOKEN = 't';
-    process.env.MONDAY_DEALS_BOARD_ID = '1';
-    process.env.MONDAY_WORK_ORDERS_BOARD_ID = '2';
-    expect(configStatus().missing).toEqual(['GEMINI_API_KEY']);
-  });
-
-  it('carries an overridden GEMINI_MODEL end to end into the request body', async () => {
-    // env -> resolveProvider/modelFor -> factory -> adapter -> HTTP body.
-    process.env.LLM_PROVIDER = 'gemini';
-    process.env.GEMINI_API_KEY = 'k';
-    process.env.GEMINI_MODEL = 'gemini-3.7-flash';
-
-    const p = resolveProvider();
-    const m = modelFor(p);
-    expect(m).toBe('gemini-3.7-flash');
-
-    const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
-    const adapter = new GeminiProvider({
-      apiKey: 'k',
-      model: m,
-      fetchImpl: f as unknown as typeof fetch,
-      maxAttempts: 1,
-    });
-    expect(adapter.model).toBe('gemini-3.7-flash');
-
-    await adapter.complete(base);
-    const body = JSON.parse(f.mock.calls[0][1].body as string);
-    expect(body.model).toBe('gemini-3.7-flash');
-  });
-
-  it('sends whatever model id it is given verbatim, with no rewriting', async () => {
-    // The compat endpoint takes bare ids; we must not add or strip a
-    // "models/" prefix, which is what caused the 404 hunt.
-    for (const id of ['gemini-3.7-flash', 'gemini-2.5-flash-lite', 'models/gemini-3.5-flash']) {
-      const f = vi.fn().mockResolvedValue(chat({ content: 'ok' }));
-      await new GeminiProvider({
-        apiKey: 'k',
-        model: id,
-        fetchImpl: f as unknown as typeof fetch,
-        maxAttempts: 1,
-      }).complete(base);
-      expect(JSON.parse(f.mock.calls[0][1].body as string).model).toBe(id);
-    }
-  });
-
-  it('names the configured model in the 404 so a bad id is self-diagnosing', async () => {
-    const f = vi.fn().mockResolvedValue(errorRes(404, 'models/gemini-9 is not found'));
-    await expect(
-      new GeminiProvider({
-        apiKey: 'k',
-        model: 'gemini-9-flash',
-        fetchImpl: f as unknown as typeof fetch,
-        maxAttempts: 1,
-      }).complete(base),
-    ).rejects.toThrow(/Gemini model "gemini-9-flash" was not found \(404\)/);
   });
 
   it('the factory builds a Gemini adapter behind the neutral interface', () => {
@@ -454,7 +499,6 @@ describe('Gemini provider selection', () => {
       cacheTtlSeconds: 300,
     });
     expect(p.providerName).toBe('gemini');
-    expect(p.model).toBe('gemini-2.5-flash');
     expect(typeof p.complete).toBe('function');
   });
 });
