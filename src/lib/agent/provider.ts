@@ -58,11 +58,22 @@ export interface LlmProvider {
 export class LlmError extends Error {
   readonly provider: string;
   readonly status?: number;
-  constructor(message: string, provider: string, status?: number) {
+  /** Server-directed wait before retrying, when the vendor supplied one. */
+  readonly retryAfterMs?: number;
+  /** Vendor rate-limit budget headers, for diagnostics. */
+  readonly rateLimit?: Record<string, string | undefined>;
+  constructor(
+    message: string,
+    provider: string,
+    status?: number,
+    extra?: { retryAfterMs?: number; rateLimit?: Record<string, string | undefined> },
+  ) {
     super(message);
     this.name = 'LlmError';
     this.provider = provider;
     this.status = status;
+    this.retryAfterMs = extra?.retryAfterMs;
+    this.rateLimit = extra?.rateLimit;
   }
 }
 

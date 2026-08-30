@@ -51,10 +51,21 @@ Then verify the model end to end against the live boards:
 npm run smoke:llm
 ```
 
-It runs six founder-level questions and checks that the model selects sensible
-tools, uses the returned figures, discloses data-quality caveats, and handles a
-cross-board query and an ambiguous one. It prints the provider and model it
-used.
+On Groq's free tier, check your token budget first — this costs ~30 tokens:
+
+```powershell
+npm run smoke:llm -- --probe
+```
+
+Then validate the real integration with a single scenario:
+
+```powershell
+npm run smoke:llm -- --quick
+```
+
+The full six-scenario run is paced ~65s apart, because each scenario costs
+~7-10k tokens against a free-tier ceiling of 8,000 tokens per minute. Running
+them back-to-back will 429. Use `--gap <seconds>` to widen the spacing.
 
 ## Step 3 — deploy
 

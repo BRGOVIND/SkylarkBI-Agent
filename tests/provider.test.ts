@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { GroqProvider, toOpenAiMessages, toOpenAiTools } from '@/lib/agent/providers/groq';
+import { GroqProvider, toOpenAiMessages, toOpenAiTools, parseGroqRetryAfter } from '@/lib/agent/providers/groq';
 import { toAnthropicMessages, toAnthropicTools } from '@/lib/agent/providers/anthropic';
 import { parseToolArguments, LlmError, type AgentMessage, type ToolSpec } from '@/lib/agent/provider';
 import { resolveProvider, modelFor, configStatus, DEFAULT_MODELS } from '@/lib/config';
@@ -160,11 +160,27 @@ describe('tool argument parsing', () => {
   });
 });
 
+describe('Groq retry-after parsing', () => {
+  it('reads the fractional wait Groq states in the 429 body', () => {
+    expect(parseGroqRetryAfter(null, 'Please try again in 7.66s.')).toBe(7660);
+    expect(parseGroqRetryAfter(null, 'Please try again in 1m23.4s.')).toBe(83400);
+  });
+  it('falls back to the retry-after header', () => {
+    expect(parseGroqRetryAfter('12', undefined)).toBe(12_000);
+  });
+  it('prefers the body figure over the coarser header', () => {
+    expect(parseGroqRetryAfter('4', 'Please try again in 3.75s.')).toBe(3750);
+  });
+  it('returns undefined when neither is present', () => {
+    expect(parseGroqRetryAfter(null, 'Rate limit reached.')).toBeUndefined();
+  });
+});
+
 /* ------------------------------ Groq provider ----------------------------- */
 
 describe('GroqProvider', () => {
-  const provider = (fetchImpl: typeof fetch) =>
-    new GroqProvider({ apiKey: 'k', model: 'openai/gpt-oss-120b', fetchImpl });
+  const provider = (fetchImpl: typeof fetch, opts: Record<string, unknown> = {}) =>
+    new GroqProvider({ apiKey: 'k', model: 'openai/gpt-oss-120b', fetchImpl, maxAttempts: 1, ...opts });
 
   const base = { system: 'S', tools: TOOLS, messages: CONVERSATION, maxTokens: 1024 };
 
@@ -247,9 +263,90 @@ describe('GroqProvider', () => {
     await expect(provider(f as unknown as typeof fetch).complete(base)).rejects.toThrow(/rejected the API key/i);
   });
 
-  it('reports rate limiting clearly', async () => {
-    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 429 }));
-    await expect(provider(f as unknown as typeof fetch).complete(base)).rejects.toThrow(/rate limit/i);
+  it('relays Groq’s own 429 explanation instead of a generic message', async () => {
+    const detail =
+      'Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` on tokens per minute (TPM): Limit 8000, Used 7600, Requested 900. Please try again in 3.75s.';
+    const f = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ error: { message: detail } }), {
+          status: 429,
+          headers: {
+            'retry-after': '4',
+            'x-ratelimit-limit-tokens': '8000',
+            'x-ratelimit-remaining-tokens': '400',
+            'x-ratelimit-reset-tokens': '3.75s',
+          },
+        }),
+    );
+    const err = await provider(f as unknown as typeof fetch, { maxAttempts: 1 })
+      .complete(base)
+      .catch((e) => e as LlmError);
+
+    expect(err).toBeInstanceOf(LlmError);
+    // The specific limit that was hit must survive to the caller.
+    expect((err as LlmError).message).toMatch(/tokens per minute \(TPM\)/);
+    expect((err as LlmError).message).toMatch(/Limit 8000/);
+    expect((err as LlmError).message).toMatch(/Retry in ~4s/);
+    expect((err as LlmError).message).toMatch(/400\/8000 left/);
+    expect((err as LlmError).retryAfterMs).toBe(3750); // from the body, not the header
+    expect((err as LlmError).rateLimit?.limitTokens).toBe('8000');
+  });
+
+  it('retries a 429 using the wait Groq asked for, then succeeds', async () => {
+    const waits: number[] = [];
+    const f = vi
+      .fn()
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { message: 'Rate limit reached. Please try again in 0.02s.' } }),
+            { status: 429 },
+          ),
+      )
+      .mockImplementationOnce(async () => chat({ content: 'Recovered.' }));
+
+    const turn = await provider(f as unknown as typeof fetch, {
+      maxAttempts: 3,
+      maxBackoffMs: 50,
+      onRetry: (n: { delayMs: number }) => waits.push(n.delayMs),
+    }).complete(base);
+
+    expect(turn.text).toEqual(['Recovered.']);
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(waits).toHaveLength(1);
+  });
+
+  it('gives up after bounded attempts rather than retrying forever', async () => {
+    const f = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify({ error: { message: 'Rate limit reached.' } }), { status: 429 }),
+    );
+    await expect(
+      provider(f as unknown as typeof fetch, { maxAttempts: 3, maxBackoffMs: 10 }).complete(base),
+    ).rejects.toThrow(/rate limit/i);
+    expect(f).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry a rejected API key', async () => {
+    const f = vi.fn().mockImplementation(async () => new Response(JSON.stringify({}), { status: 401 }));
+    await expect(
+      provider(f as unknown as typeof fetch, { maxAttempts: 3 }).complete(base),
+    ).rejects.toThrow(/rejected the API key/i);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes rate-limit headroom from successful responses too', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const f = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+        status: 200,
+        headers: { 'x-ratelimit-remaining-tokens': '5200', 'x-ratelimit-limit-tokens': '8000' },
+      }),
+    );
+    await provider(f as unknown as typeof fetch, {
+      onRateLimit: (i: Record<string, unknown>) => seen.push(i),
+    }).complete(base);
+    expect(seen[0].remainingTokens).toBe('5200');
+    expect(seen[0].limitTokens).toBe('8000');
   });
 
   it('surfaces an API error message', async () => {

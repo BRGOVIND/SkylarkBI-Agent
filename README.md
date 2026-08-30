@@ -68,6 +68,28 @@ The agent needs exactly one thing from a model vendor: **multi-turn tool calling
 | Cost | Free tier available | Paid |
 | Tool calling | Yes | Yes |
 | Context | 131k | 200k |
+| Free-tier TPM | 8,000 | n/a |
+
+### Token budget on Groq's free tier
+
+One question costs **two** model requests — one to choose a tool, one to answer
+with its result — and each request re-sends the system prompt plus all nine tool
+schemas (~2,800 tokens). A single question therefore costs roughly
+**7,000–10,000 tokens**, against a free-tier ceiling of **8,000 tokens per
+minute**.
+
+Practical consequences:
+
+- Interactive use is fine: one question per minute sits inside the budget.
+- Asking two questions in quick succession, or asking for a full leadership
+  update (its tool result alone is ~3,900 tokens), can hit a 429.
+- The adapter retries a 429 using the wait Groq itself specifies, bounded to
+  three attempts, and reports the exact limit that was hit.
+- A paid Groq tier or a higher-TPM model removes the constraint entirely; no
+  code change is needed, only `GROQ_MODEL`.
+
+Check your account's actual limits at any time with `npm run smoke:llm -- --probe`
+(one request, ~30 tokens).
 
 Switching is two environment variables — no code change:
 
@@ -202,7 +224,7 @@ The boards created by the seed script use the source spreadsheet headers verbati
 ## Testing
 
 ```bash
-npm test          # 186 tests
+npm test          # 194 tests
 npm run typecheck
 ```
 
