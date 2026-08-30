@@ -131,3 +131,35 @@ If it returns `not_configured`, the listed variables are missing. If it returns
   recommended. Write scope is only needed once, for the seeding step.
 - The app requires a server runtime. It cannot be exported as a static site —
   that would place secrets in the browser.
+
+
+## Production considerations
+
+### Request timeout (the one real deployment risk)
+
+A complex question can take **18–80 seconds**: each agent round is a model call,
+and an ambiguous question may use several rounds plus multiple monday.com tool
+calls.
+
+`maxDuration` is set to **60s** in both `vercel.json` and the chat route,
+because 60s is the maximum on Vercel's Hobby plan and is guaranteed to deploy.
+**A query exceeding 60s will be cut off.**
+
+If you see timeouts, raise it — Pro/Fluid compute allows up to 300s:
+
+1. `vercel.json` -> `functions["src/app/api/chat/route.ts"].maxDuration: 300`
+2. `src/app/api/chat/route.ts` -> `export const maxDuration = 300;`
+
+Both must match. Do not raise it above your plan's limit or the deployment
+will be rejected.
+
+### Health endpoint caching
+
+`/api/health` returns `Cache-Control: no-store`. This is deliberate: a cached
+health response would let the UI report a live monday.com connection while the
+backend was actually down. Do not add caching to it.
+
+### Node version
+
+`package.json` pins `engines.node >= 20`, which Next.js 16 requires. Vercel
+reads this when selecting the runtime.

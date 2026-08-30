@@ -47,7 +47,8 @@ export default function Chat() {
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    fetch('/api/health')
+    // no-store: a cached health response would misreport the connection state.
+    fetch('/api/health', { cache: 'no-store' })
       .then((r) => r.json())
       .then(setHealth)
       .catch(() => setHealth({ status: 'error', message: 'Could not reach the server.' }));

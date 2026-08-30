@@ -402,19 +402,23 @@ export class GeminiProvider implements LlmProvider {
       if (part.thought) continue;
       if (typeof part.text === 'string' && part.text.trim()) textOut.push(part.text);
       if (part.functionCall) {
-  const thoughtSignature =
-    part.thoughtSignature ??
-    part.thought_signature;
+        // The signature is a Part-level field, but accept a nested one too so a
+        // response shape variant cannot silently drop it. Preserved verbatim —
+        // never generated, never modified.
+        const thoughtSignature =
+          part.thoughtSignature ??
+          part.thought_signature ??
+          part.functionCall.thoughtSignature ??
+          part.functionCall.thought_signature;
 
-  toolCalls.push({
-    id: `call_${toolCalls.length}`,
-    name: part.functionCall.name ?? '',
-    input: (part.functionCall.args ?? {}) as Record<string, unknown>,
-    ...(thoughtSignature
-      ? { providerMetadata: { thoughtSignature } }
-      : {}),
-  });
-}
+        toolCalls.push({
+          id: `call_${toolCalls.length}`,
+          name: part.functionCall.name ?? '',
+          input: (part.functionCall.args ?? {}) as Record<string, unknown>,
+          // Absent when Gemini did not supply one — never fabricated.
+          ...(thoughtSignature ? { providerMetadata: { thoughtSignature } } : {}),
+        });
+      }
     }
 
     if (candidate.finishReason === 'MALFORMED_FUNCTION_CALL') {

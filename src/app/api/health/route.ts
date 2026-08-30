@@ -5,6 +5,13 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
+ * Health must never be cached. A stale "connected" response would let the UI
+ * claim a live monday.com connection while the backend is actually down or
+ * misconfigured — the status indicator would be lying to the user.
+ */
+const NO_STORE = { 'Cache-Control': 'no-store, max-age=0' } as const;
+
+/**
  * Connectivity and setup check. Deliberately reports only counts and setup
  * state — never any board content, and never the value of any secret.
  */
@@ -18,7 +25,7 @@ export async function GET() {
         llm: { provider: cfg.provider, model: cfg.model },
         hint: 'Set these environment variables and redeploy. See .env.example.',
       },
-      { status: 503 },
+      { status: 503, headers: NO_STORE },
     );
   }
 
@@ -45,9 +52,14 @@ export async function GET() {
           unresolvedColumns: data.quality.workOrders.unresolvedColumns,
         },
       },
-    });
+    },
+      { headers: NO_STORE },
+    );
   } catch (err) {
     const e = describeError(err);
-    return Response.json({ status: 'error', kind: e.kind, message: e.message }, { status: 502 });
+    return Response.json(
+      { status: 'error', kind: e.kind, message: e.message },
+      { status: 502, headers: NO_STORE },
+    );
   }
 }
