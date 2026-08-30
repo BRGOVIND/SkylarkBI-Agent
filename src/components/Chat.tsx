@@ -3,17 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-interface ToolCall {
-  name: string;
-  label: string;
-}
+import AgentMark from './AgentMark';
+import Opening, { useIntro } from './Opening';
+import TelemetryRail, { type RailStep } from './TelemetryRail';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
-  tools?: ToolCall[];
+  /** Real tool events, in the order the stream reported them. */
+  steps?: RailStep[];
   error?: string;
+  startedAt?: number;
+  totalSeconds?: number;
 }
 
 interface Health {
@@ -21,22 +22,34 @@ interface Health {
   monday?: string;
   missingEnvVars?: string[];
   message?: string;
+  llm?: { provider: string | null; model: string | null };
   boards?: {
     deals: { usableRecords: number };
     workOrders: { usableRecords: number };
   };
 }
 
-const SAMPLES: Array<{ q: string; hint: string }> = [
-  { q: 'How is our pipeline looking this quarter?', hint: 'Pipeline health' },
-  { q: 'Which sectors are performing best?', hint: 'Sector comparison' },
-  { q: "What's our pipeline exposure to the energy sector?", hint: 'Ambiguous — expect a clarification' },
-  { q: 'Which customers have both active work and open opportunities?', hint: 'Cross-board join' },
-  { q: 'What operational risks should leadership know about?', hint: 'Risk detection' },
-  { q: 'Give me a leadership update.', hint: 'Full briefing pack' },
+const PROMPTS: Array<{ q: string; hint: string }> = [
+  { q: 'How is our pipeline looking?', hint: 'Open value, weighted, win rate' },
+  { q: 'Which sectors are performing best?', hint: 'Across deals and delivery' },
+  { q: 'Which customers have both active work and open pipeline?', hint: 'Joins the two boards' },
+  { q: 'What operational risks should leadership know about?', hint: 'Overdue, stalled, unbilled' },
+  { q: 'How complete is the deal value data?', hint: 'Coverage and caveats' },
   { q: 'What is our expected revenue?', hint: 'Order book vs billed vs collected' },
-  { q: 'How reliable is this data?', hint: 'Data quality report' },
 ];
+
+/**
+ * A figure the agent chose to emphasise gets the data face. Presentation only —
+ * the value is whatever the deterministic analytics produced upstream, and is
+ * never parsed, reformatted or recomputed here.
+ */
+const FIGURE = /[\d₹]/;
+
+function textOf(node: React.ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  return '';
+}
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -45,6 +58,7 @@ export default function Chat() {
   const [health, setHealth] = useState<Health | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const intro = useIntro();
 
   useEffect(() => {
     // no-store: a cached health response would misreport the connection state.
@@ -61,12 +75,14 @@ export default function Chat() {
   const send = useCallback(
     async (text: string) => {
       const q = text.trim();
-      if (!q || busy) return;
+      if (!q || busy) return; // empty input and double-submit guard
 
+      const startedAt = Date.now();
       const history = [...messages, { role: 'user' as const, content: q }];
-      setMessages([...history, { role: 'assistant', content: '', tools: [] }]);
+      setMessages([...history, { role: 'assistant', content: '', steps: [], startedAt }]);
       setInput('');
       setBusy(true);
+      if (taRef.current) taRef.current.style.height = 'auto';
 
       const patch = (fn: (m: Message) => Message) =>
         setMessages((prev) => {
@@ -112,7 +128,14 @@ export default function Chat() {
             if (ev.type === 'tool') {
               patch((m) => ({
                 ...m,
-                tools: [...(m.tools ?? []), { name: ev.name ?? '', label: ev.label ?? ev.name ?? '' }],
+                steps: [
+                  ...(m.steps ?? []),
+                  {
+                    name: ev.name ?? '',
+                    label: ev.label ?? ev.name ?? '',
+                    at: Math.round((Date.now() - startedAt) / 1000),
+                  },
+                ],
               }));
             } else if (ev.type === 'text') {
               patch((m) => ({ ...m, content: m.content ? `${m.content}\n\n${ev.text}` : ev.text ?? '' }));
@@ -124,6 +147,7 @@ export default function Chat() {
       } catch {
         patch((m) => ({ ...m, error: 'Lost connection to the agent. Please try again.' }));
       } finally {
+        patch((m) => ({ ...m, totalSeconds: Math.round((Date.now() - startedAt) / 1000) }));
         setBusy(false);
       }
     },
@@ -139,164 +163,207 @@ export default function Chat() {
 
   const autosize = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';
-    el.style.height = `${Math.min(160, el.scrollHeight)}px`;
+    el.style.height = `${Math.min(168, el.scrollHeight)}px`;
   };
 
   const configured = health?.status === 'ok';
   const notConfigured = health?.status === 'not_configured';
+  const empty = messages.length === 0;
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="mark">SD</div>
-        <div>
-          <h1>Skylark Business Intelligence</h1>
-          <p>Live monday.com Deals &amp; Work Orders &middot; read-only</p>
-        </div>
-        <div className="status">
-          <span
-            className={`dot ${configured ? 'ok' : notConfigured ? 'warn' : health ? 'bad' : ''}`}
-          />
-          {!health
-            ? 'Connecting…'
-            : configured
-              ? `${health.boards?.deals.usableRecords ?? 0} deals · ${health.boards?.workOrders.usableRecords ?? 0} work orders`
-              : notConfigured
-                ? 'Not configured'
-                : 'monday.com unreachable'}
-        </div>
-      </header>
+    <>
+      <Opening playing={intro} />
 
-      <div className="feed" ref={feedRef}>
-        {notConfigured && (
-          <div className="banner setup">
-            <strong>Setup required</strong>
-            This deployment is missing{' '}
-            {health.missingEnvVars?.map((v, i) => (
-              <span key={v}>
-                {i > 0 && ', '}
-                <code>{v}</code>
-              </span>
-            ))}
-            . Set them in the hosting environment and redeploy — see the README.
+      <div className={`app${intro ? ' boot' : ''}`}>
+        <header className="header">
+          <div className="header-id">
+            <AgentMark size={26} />
+            <h1>
+              Skylark <span>Intelligence</span>
+            </h1>
           </div>
-        )}
-        {health?.status === 'error' && (
-          <div className="banner error">
-            <strong>Cannot reach monday.com</strong>
-            {health.message}
-          </div>
-        )}
 
-        {messages.length === 0 ? (
-          <div className="empty">
-            <h2>Ask about pipeline, delivery, or revenue.</h2>
-            <p>
-              I query your monday.com Deals and Work Orders boards live, normalise the messy bits, and
-              compute every figure deterministically — so numbers come with their coverage, not just a
-              total. I never write to monday.com.
-            </p>
-            <div className="samples-label">Try one</div>
-            <div className="samples">
-              {SAMPLES.map((s) => (
-                <button key={s.q} className="sample" onClick={() => void send(s.q)} disabled={busy}>
-                  {s.q}
-                  <span>{s.hint}</span>
-                </button>
+          <div className="status">
+            <span
+              className={`dot ${configured ? 'live' : notConfigured ? 'warn' : health ? 'bad' : ''}`}
+            />
+            <span>
+              {!health ? (
+                'Connecting'
+              ) : configured ? (
+                <>
+                  <b>{health.boards?.deals.usableRecords ?? 0}</b> deals
+                  <span className="status-text">
+                    {' · '}
+                    <b>{health.boards?.workOrders.usableRecords ?? 0}</b> work orders
+                  </span>
+                </>
+              ) : notConfigured ? (
+                'Not configured'
+              ) : (
+                'monday.com unreachable'
+              )}
+            </span>
+          </div>
+        </header>
+
+        <main className="feed" ref={feedRef}>
+          {notConfigured && (
+            <div className="banner setup" role="status">
+              <strong>Setup required</strong>
+              This deployment is missing{' '}
+              {health.missingEnvVars?.map((v, i) => (
+                <span key={v}>
+                  {i > 0 && ', '}
+                  <code>{v}</code>
+                </span>
               ))}
+              . Set them in the hosting environment and redeploy — see the README.
             </div>
-          </div>
-        ) : (
-          messages.map((m, i) =>
-            m.role === 'user' ? (
-              <div key={i} className="msg msg-user">
-                <div className="bubble">{m.content}</div>
-              </div>
-            ) : (
-              <div key={i} className="msg msg-agent">
-                {!!m.tools?.length && (
-                  <div className="tools">
-                    {m.tools.map((t, j) => (
-                      <span key={j} className="tool-chip">
-                        {t.label}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {m.error && (
-                  <div className="banner error">
-                    <strong>Something went wrong</strong>
-                    {m.error}
-                  </div>
-                )}
-                {m.content && (
-                  <div className="body">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        table: ({ children }) => (
-                          <div className="table-wrap">
-                            <table>{children}</table>
-                          </div>
-                        ),
-                        a: ({ children }) => <>{children}</>,
-                      }}
-                    >
-                      {m.content}
-                    </ReactMarkdown>
-                  </div>
-                )}
-                {busy && i === messages.length - 1 && !m.content && !m.error && (
-                  <div className="thinking">
-                    <i />
-                    <i />
-                    <i />
-                    <span style={{ marginLeft: 6 }}>
-                      {m.tools?.length ? 'Analysing board data…' : 'Reading monday.com…'}
-                    </span>
-                  </div>
-                )}
-              </div>
-            ),
-          )
-        )}
-      </div>
-
-      <div className="composer">
-        <div className="composer-row">
-          <textarea
-            ref={taRef}
-            rows={1}
-            value={input}
-            placeholder="Ask a business question…"
-            onChange={(e) => {
-              setInput(e.target.value);
-              autosize(e.target);
-            }}
-            onKeyDown={onKeyDown}
-            disabled={busy}
-          />
-          <button className="send" onClick={() => void send(input)} disabled={busy || !input.trim()}>
-            {busy ? 'Working…' : 'Ask'}
-          </button>
-        </div>
-        <div className="composer-foot">
-          {messages.length > 0 && (
-            <button
-              className="linkish"
-              onClick={() => {
-                setMessages([]);
-                setInput('');
-                taRef.current?.focus();
-              }}
-              disabled={busy}
-            >
-              New conversation
-            </button>
           )}
-          <span className="readonly-pill">Read-only · figures computed in code</span>
+          {health?.status === 'error' && (
+            <div className="banner error" role="status">
+              <strong>Cannot reach monday.com</strong>
+              {health.message}
+            </div>
+          )}
+
+          {empty ? (
+            <div className="hero stagger">
+              <h2 className="hero-line">
+                Your business, <em>understood</em>.
+              </h2>
+              <p className="hero-sub">
+                Ask across your deals and work orders in plain language. Every figure is computed in
+                code from live monday.com data — and comes with what it was based on, so you can see
+                where the numbers are thin.
+              </p>
+              <div>
+                <div className="prompts-label">Start with one of these</div>
+                <div className="prompts">
+                  {PROMPTS.map((p) => (
+                    <button
+                      key={p.q}
+                      className="prompt"
+                      onClick={() => void send(p.q)}
+                      disabled={busy}
+                    >
+                      {p.q}
+                      <small>{p.hint}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            messages.map((m, i) =>
+              m.role === 'user' ? (
+                <div key={i} className="msg msg-user">
+                  <div className="bubble">{m.content}</div>
+                </div>
+              ) : (
+                <div key={i} className="msg msg-agent">
+                  <TelemetryRail
+                    steps={m.steps ?? []}
+                    running={busy && i === messages.length - 1}
+                    startedAt={m.startedAt ?? null}
+                    totalSeconds={m.totalSeconds ?? null}
+                    hasAnswer={!!m.content}
+                  />
+
+                  {m.error && (
+                    <div className="banner error" role="alert">
+                      <strong>Something went wrong</strong>
+                      {m.error}
+                    </div>
+                  )}
+
+                  {m.content && (
+                    <div className="body">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          table: ({ children }) => (
+                            <div className="table-wrap" tabIndex={0} role="group">
+                              <table>{children}</table>
+                            </div>
+                          ),
+                          strong: ({ children }) => {
+                            const t = textOf(children);
+                            return (
+                              <strong className={FIGURE.test(t) ? 'metric' : undefined}>
+                                {children}
+                              </strong>
+                            );
+                          },
+                          a: ({ children }) => <>{children}</>,
+                        }}
+                      >
+                        {m.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                </div>
+              ),
+            )
+          )}
+        </main>
+
+        <div className="composer">
+          <div className="composer-row">
+            <textarea
+              ref={taRef}
+              rows={1}
+              value={input}
+              aria-label="Ask a business question"
+              placeholder="Ask about pipeline, sectors, delivery or risk…"
+              onChange={(e) => {
+                setInput(e.target.value);
+                autosize(e.target);
+              }}
+              onKeyDown={onKeyDown}
+              disabled={busy}
+            />
+            <button
+              className="send"
+              onClick={() => void send(input)}
+              disabled={busy || !input.trim()}
+              aria-label={busy ? 'Working' : 'Send question'}
+            >
+              <span className="send-label">{busy ? 'Working' : 'Ask'}</span>
+              <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true">
+                <path
+                  d="M1 7h11M8 3l4 4-4 4"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <div className="composer-foot">
+            {!empty && (
+              <button
+                className="linkish"
+                onClick={() => {
+                  setMessages([]);
+                  setInput('');
+                  taRef.current?.focus();
+                }}
+                disabled={busy}
+              >
+                New conversation
+              </button>
+            )}
+            <span className="foot-note">
+              Read-only · every figure computed in code
+            </span>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
