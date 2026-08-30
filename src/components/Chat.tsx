@@ -277,21 +277,16 @@ export default function Chat() {
           <div className="feed">
             {notConfigured && (
               <div className="banner setup" role="status">
-                <strong>Skylark is not connected to a data source yet</strong>
-                This deployment is missing{' '}
-                {health.missingEnvVars?.map((v, i) => (
-                  <span key={v}>
-                    {i > 0 && ', '}
-                    <code>{v}</code>
-                  </span>
-                ))}
-                . Set them in the hosting environment and redeploy.
+                <strong>Skylark is not connected to its business data yet</strong>
+                Add the data-source and model configuration in the hosting environment, then
+                redeploy. The exact settings are listed in the project&rsquo;s deployment guide.
               </div>
             )}
             {health?.status === 'error' && (
               <div className="banner error" role="status">
-                <strong>Skylark could not reach its data source</strong>
-                {health.message}
+                <strong>Skylark could not reach its business data</strong>
+                The data source did not respond. This is usually a configuration or connectivity
+                problem rather than a fault in your question &mdash; try again shortly.
               </div>
             )}
 

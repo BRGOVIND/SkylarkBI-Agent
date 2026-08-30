@@ -98,7 +98,15 @@ export function loadConfig(): AppConfig {
   return cfg;
 }
 
-/** Non-throwing variant used by the health endpoint to report setup state. */
+/**
+ * Non-throwing variant used by the health endpoint to report setup state.
+ *
+ * The provider requirement is conditional: only the SELECTED provider's key is
+ * ever reported missing. When no provider is selected and no key of any kind is
+ * present, the requirement is reported as a category rather than naming one
+ * vendor's variable — telling an operator who intends to use Gemini that
+ * ANTHROPIC_API_KEY is missing is actively misleading.
+ */
 export function configStatus(): {
   ok: boolean;
   missing: string[];
@@ -117,8 +125,22 @@ export function configStatus(): {
       model: null,
     };
   }
-  for (const k of ['MONDAY_API_TOKEN', 'MONDAY_DEALS_BOARD_ID', 'MONDAY_WORK_ORDERS_BOARD_ID', KEY_VAR[provider]]) {
+  for (const k of ['MONDAY_API_TOKEN', 'MONDAY_DEALS_BOARD_ID', 'MONDAY_WORK_ORDERS_BOARD_ID']) {
     if (!process.env[k]?.trim()) missing.push(k);
   }
+
+  const providerChosen = !!process.env.LLM_PROVIDER?.trim();
+  const anyProviderKey = (['gemini', 'groq', 'anthropic'] as LlmProviderName[]).some(
+    (p) => process.env[KEY_VAR[p]]?.trim(),
+  );
+
+  if (!process.env[KEY_VAR[provider]]?.trim()) {
+    missing.push(
+      providerChosen || anyProviderKey
+        ? KEY_VAR[provider]
+        : 'LLM_PROVIDER and its matching API key',
+    );
+  }
+
   return { ok: missing.length === 0, missing, provider, model: modelFor(provider) };
 }

@@ -1195,10 +1195,12 @@ body {
   }
   .feed { padding-top: 28px; }
 
-  /* the bar keeps the mark, name and status; About moves out of the way */
-  .ghost-btn { display: none; }
-  .bar-tools { gap: 10px; }
+  /* Space is made by shortening the wordmark and dropping the record counts —
+     never by removing About, which is the only route to what the agent is. */
+  .bar-name span { display: none; }
+  .bar-tools { gap: 9px; }
   .agent-status-detail { display: none; }
+  .ghost-btn { padding: 5px 11px; font-size: 12px; }
 
   .prompts { grid-template-columns: 1fr; }
   .msg-user .bubble { max-width: 92%; }
@@ -1215,6 +1217,9 @@ body {
 @media (max-width: 400px) {
   .composer-foot { gap: 10px; }
   .about { padding: 20px 20px 22px; }
+  /* the ring alone still communicates state at this width */
+  .bar .agent-status-label { display: none; }
+  .bar .agent-status { gap: 0; }
 }
 
 /* =========================== reduced motion ===============================

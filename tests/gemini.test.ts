@@ -502,3 +502,58 @@ describe('Gemini provider selection', () => {
     expect(typeof p.complete).toBe('function');
   });
 });
+
+/* ------------------- provider-conditional setup reporting ----------------- */
+
+describe('setup reporting names only the relevant provider', () => {
+  const ENV = { ...process.env };
+  beforeEach(() => {
+    for (const k of [
+      'LLM_PROVIDER', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'ANTHROPIC_API_KEY',
+      'MONDAY_API_TOKEN', 'MONDAY_DEALS_BOARD_ID', 'MONDAY_WORK_ORDERS_BOARD_ID',
+    ]) delete process.env[k];
+    process.env.MONDAY_API_TOKEN = 't';
+    process.env.MONDAY_DEALS_BOARD_ID = '1';
+    process.env.MONDAY_WORK_ORDERS_BOARD_ID = '2';
+  });
+  afterEach(() => {
+    process.env = { ...ENV };
+  });
+
+  it('asks for the Gemini key when Gemini is selected', () => {
+    process.env.LLM_PROVIDER = 'gemini';
+    expect(configStatus().missing).toEqual(['GEMINI_API_KEY']);
+  });
+
+  it('never mentions Anthropic when Gemini is selected', () => {
+    process.env.LLM_PROVIDER = 'gemini';
+    expect(configStatus().missing.join(' ')).not.toMatch(/ANTHROPIC/);
+  });
+
+  it('asks for the Groq key when Groq is selected', () => {
+    process.env.LLM_PROVIDER = 'groq';
+    expect(configStatus().missing).toEqual(['GROQ_API_KEY']);
+  });
+
+  it('reports a neutral requirement when no provider is chosen and no key exists', () => {
+    // Naming ANTHROPIC_API_KEY here would mislead an operator who intends to
+    // use Gemini — the default is an inference, not a decision they made.
+    const missing = configStatus().missing;
+    expect(missing).toEqual(['LLM_PROVIDER and its matching API key']);
+    expect(missing.join(' ')).not.toMatch(/ANTHROPIC|GEMINI|GROQ/);
+  });
+
+  it('names the inferred provider key once a key is present', () => {
+    process.env.ANTHROPIC_API_KEY = 'x';
+    expect(configStatus().ok).toBe(true);
+    expect(configStatus().provider).toBe('anthropic');
+  });
+
+  it('is ok with only the selected provider key set', () => {
+    process.env.LLM_PROVIDER = 'gemini';
+    process.env.GEMINI_API_KEY = 'g';
+    const s = configStatus();
+    expect(s.ok).toBe(true);
+    expect(s.missing).toEqual([]);
+  });
+});
