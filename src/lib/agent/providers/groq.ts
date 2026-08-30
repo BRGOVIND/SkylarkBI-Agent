@@ -1,12 +1,14 @@
+import { LlmError, type CompleteArgs, type LlmProvider, type LlmTurn } from '../provider';
 import {
-  LlmError,
-  parseToolArguments,
-  type AgentMessage,
-  type CompleteArgs,
-  type LlmProvider,
-  type LlmTurn,
-  type ToolSpec,
-} from '../provider';
+  decodeAssistantMessage,
+  toOpenAiMessages,
+  toOpenAiTools,
+  type OpenAiChatResponse,
+} from './openai-wire';
+
+// Re-exported so existing importers keep working; the implementations are
+// shared with the Gemini adapter.
+export { toOpenAiMessages, toOpenAiTools };
 
 /**
  * Groq adapter, speaking the OpenAI-compatible Chat Completions API.
@@ -17,28 +19,6 @@ import {
  */
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-
-interface OpenAiToolCall {
-  id: string;
-  type: string;
-  function: { name: string; arguments: string };
-}
-
-interface OpenAiMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
-  tool_calls?: OpenAiToolCall[];
-  tool_call_id?: string;
-  name?: string;
-}
-
-interface ChatResponse {
-  choices?: Array<{
-    message?: { content: string | null; tool_calls?: OpenAiToolCall[] };
-    finish_reason?: string;
-  }>;
-  error?: { message?: string; type?: string; code?: string };
-}
 
 /** Groq's advertised budget and what is left of it, straight from the headers. */
 export interface GroqRateLimit {
@@ -80,46 +60,6 @@ export function parseGroqRetryAfter(header: string | null, message?: string): nu
     if (Number.isFinite(n) && n >= 0) return Math.min(n, 300) * 1000;
   }
   return undefined;
-}
-
-/** Neutral messages -> OpenAI chat messages. */
-export function toOpenAiMessages(system: string, messages: AgentMessage[]): OpenAiMessage[] {
-  const out: OpenAiMessage[] = [{ role: 'system', content: system }];
-  for (const m of messages) {
-    if (m.role === 'user') {
-      out.push({ role: 'user', content: m.text });
-    } else if (m.role === 'assistant') {
-      out.push({
-        role: 'assistant',
-        // OpenAI requires content to be present; null is the accepted form for
-        // a turn that was purely tool calls.
-        content: m.text || null,
-        ...(m.toolCalls.length
-          ? {
-              tool_calls: m.toolCalls.map((tc) => ({
-                id: tc.id,
-                type: 'function',
-                function: { name: tc.name, arguments: JSON.stringify(tc.input) },
-              })),
-            }
-          : {}),
-      });
-    } else {
-      // Anthropic batches tool results into one message; OpenAI wants one
-      // message per result, each keyed to its call id.
-      for (const r of m.results) {
-        out.push({ role: 'tool', tool_call_id: r.id, name: r.name, content: r.content });
-      }
-    }
-  }
-  return out;
-}
-
-export function toOpenAiTools(tools: ToolSpec[]) {
-  return tools.map((t) => ({
-    type: 'function' as const,
-    function: { name: t.name, description: t.description, parameters: t.parameters },
-  }));
 }
 
 export interface GroqProviderOptions {
@@ -230,9 +170,9 @@ export class GroqProvider implements LlmProvider {
     this.onRateLimit?.(rateLimit);
 
     const text = await res.text();
-    let body: ChatResponse = {};
+    let body: OpenAiChatResponse = {};
     try {
-      body = JSON.parse(text) as ChatResponse;
+      body = JSON.parse(text) as OpenAiChatResponse;
     } catch {
       if (res.ok) {
         throw new LlmError(`Groq returned a non-JSON response (HTTP ${res.status}).`, this.providerName, res.status);
@@ -274,16 +214,6 @@ export class GroqProvider implements LlmProvider {
     if (!message) {
       throw new LlmError('Groq response contained no message.', this.providerName, res.status);
     }
-
-    const toolCalls = (message.tool_calls ?? [])
-      // Guard against non-function tool types this agent does not use.
-      .filter((tc) => !tc.type || tc.type === 'function')
-      .map((tc) => {
-        const { input, parseError } = parseToolArguments(tc.function?.arguments);
-        return { id: tc.id, name: tc.function?.name ?? '', input, parseError };
-      });
-
-    const content = (message.content ?? '').trim();
-    return { text: content ? [content] : [], toolCalls };
+    return decodeAssistantMessage(message);
   }
 }

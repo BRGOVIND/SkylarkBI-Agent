@@ -28,7 +28,7 @@ Browser (React chat UI)
    │
    ▼
 Agent orchestrator  (src/lib/agent)
-   │  Groq or Anthropic, behind one adapter. Interprets, selects tools,
+   │  Gemini, Groq or Anthropic behind one adapter. Interprets, selects tools,
    │  synthesises, clarifies. Never computes.
    ▼
 Tool layer  (src/lib/agent/tools.ts)
@@ -62,34 +62,53 @@ monday.com API  (READ ONLY)
 
 The agent needs exactly one thing from a model vendor: **multi-turn tool calling**. It uses no structured-output mode, no vendor streaming, no prompt caching and no other vendor-specific feature, so the vendor sits behind a small adapter (`src/lib/agent/provider.ts`) and the BI layer is unaware of which one is answering.
 
-| | Groq (default) | Anthropic |
-|---|---|---|
-| Model | `openai/gpt-oss-120b` | `claude-sonnet-4-5` |
-| Cost | Free tier available | Paid |
-| Tool calling | Yes | Yes |
-| Context | 131k | 200k |
-| Free-tier TPM | 8,000 | n/a |
+| | Gemini (primary) | Groq | Anthropic |
+|---|---|---|---|
+| Model | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `claude-sonnet-4-5` |
+| Cost | Free tier | Free tier | Paid |
+| Tool calling | Yes | Yes | Yes |
+| Integration | OpenAI-compat endpoint | Native | Official SDK |
 
-### Token budget on Groq's free tier
+Selecting one is two environment variables — no code change:
 
-One question costs **two** model requests — one to choose a tool, one to answer
-with its result — and each request re-sends the system prompt plus all nine tool
-schemas (~2,800 tokens). A single question therefore costs roughly
-**7,000–10,000 tokens**, against a free-tier ceiling of **8,000 tokens per
-minute**.
+```bash
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+```
 
-Practical consequences:
+**Only the selected provider's key is required.** If `LLM_PROVIDER` is omitted,
+the first key present is used, in the order gemini -> groq -> anthropic.
 
-- Interactive use is fine: one question per minute sits inside the budget.
-- Asking two questions in quick succession, or asking for a full leadership
-  update (its tool result alone is ~3,900 tokens), can hit a 429.
-- The adapter retries a 429 using the wait Groq itself specifies, bounded to
-  three attempts, and reports the exact limit that was hit.
-- A paid Groq tier or a higher-TPM model removes the constraint entirely; no
-  code change is needed, only `GROQ_MODEL`.
+### Why Gemini uses the OpenAI-compatibility endpoint
 
-Check your account's actual limits at any time with `npm run smoke:llm -- --probe`
-(one request, ~30 tokens).
+Google offers both a native SDK (`@google/genai`) and an OpenAI-compatible
+endpoint. This adapter uses the latter, for one specific reason: the **native
+Gemini API pairs a function response to its call by function *name*** —
+`functionCall`/`functionResponse` parts carry no call id. This agent's neutral
+interface pairs by id, which is what keeps two parallel calls to the *same*
+tool (two sector queries with different filters, say) unambiguous. Adapting the
+native shape would mean synthesising ids and re-associating them by name and
+position — a correctness risk exactly where a BI agent can least afford one.
+
+The compatibility endpoint speaks the same `tool_calls` / `tool_call_id`
+dialect the neutral interface already models, needs no new dependency, and
+shares its translation code with the Groq adapter (`providers/openai-wire.ts`).
+It is documented as beta; because it sits behind the adapter, switching to the
+native SDK later would touch one file.
+
+### Token footprint
+
+Every request re-sends the system prompt (~1,075 tokens) plus all nine tool
+schemas (~1,759), so each carries a **~2,834-token base**. One question costs
+two requests, so roughly **7,000–10,000 tokens**.
+
+That is comfortable on Gemini, and tight on Groq's 8,000 tokens/minute free
+tier. The base is not padding — the tool schemas are what let the model pick
+the right tool, and trimming them would trade correctness for tokens. No
+second routing call is used: one model turn selects the tool directly, which is
+cheaper than a router plus an executor.
+
+Check your live limits with `npm run smoke:llm -- --probe` (one minimal request).
 
 Switching is two environment variables — no code change:
 
@@ -125,7 +144,7 @@ Interpreted as: *prepare the data layer of a leadership update, not the prose*. 
 
 - Node.js 20+
 - A monday.com account
-- An LLM API key: **Groq** (free tier) or Anthropic
+- An LLM API key: **Google Gemini** (free tier, primary), Groq, or Anthropic
 
 ### 1. Install
 
@@ -174,7 +193,9 @@ Copy `.env.example` to `.env.local` and fill in:
 | `MONDAY_API_TOKEN` | yes | monday.com personal API token. Read-only is sufficient. |
 | `MONDAY_DEALS_BOARD_ID` | yes | Numeric ID of the Deals board |
 | `MONDAY_WORK_ORDERS_BOARD_ID` | yes | Numeric ID of the Work Orders board |
-| `LLM_PROVIDER` | no | `groq` or `anthropic`. Inferred from whichever key is set; defaults to `anthropic`. |
+| `LLM_PROVIDER` | no | `gemini`, `groq` or `anthropic`. Inferred from whichever key is set. |
+| `GEMINI_API_KEY` | if using Gemini | Google AI Studio key |
+| `GEMINI_MODEL` | no | Defaults to `gemini-2.5-flash` |
 | `GROQ_API_KEY` | if using Groq | Groq API key (free tier available) |
 | `GROQ_MODEL` | no | Defaults to `openai/gpt-oss-120b` |
 | `ANTHROPIC_API_KEY` | if using Anthropic | Anthropic API key |
@@ -224,7 +245,7 @@ The boards created by the seed script use the source spreadsheet headers verbati
 ## Testing
 
 ```bash
-npm test          # 194 tests
+npm test          # 237 tests
 npm run typecheck
 ```
 
@@ -235,6 +256,8 @@ Coverage is concentrated on the parts that can produce a wrong business answer:
 | `tests/normalize.test.ts` | Date/number parsing across every format in the source data, null-sentinel handling, missing-vs-malformed, sector/stage/status canonicalisation, duplicate and header-echo removal, column resolution |
 | `tests/analytics.test.ts` | Pipeline/sector/operational maths, coverage accounting, weighted pipeline, win-rate edge cases, risk rules, cross-board join, empty-period explanation, division-by-zero |
 | `tests/monday.test.ts` | Mutation refusal, 401/429/5xx handling, retry policy, malformed JSON, network failure, pagination, missing board, empty board |
+| `tests/gemini.test.ts` | Gemini request shape, tool-call decoding, parallel and same-tool calls, quota/404/auth errors, key never leaving the Authorization header, provider selection |
+| `tests/gemini-agent.test.ts` | All six founder scenarios end to end through a real GeminiProvider with stubbed fetch: tool selection, deterministic figures reaching the model intact, coverage and caveat propagation, cross-board join |
 | `tests/provider.test.ts` | Tool-schema translation to both vendor formats, message/tool-result encoding, argument parsing, Groq auth/rate-limit/network errors, provider selection |
 | `tests/agent-loop.test.ts` | The full agent loop against real analytics with a scripted provider: tool selection, tool-result feedback, parallel calls, cross-board queries, caveat propagation, round cap |
 | `tests/pipeline-fixture.test.ts` | **End-to-end against the real supplied spreadsheets** — every column resolves, zero malformed dates or values, sector totals reconcile with pipeline totals, duplicates and header rows removed |

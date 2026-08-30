@@ -15,7 +15,7 @@ export class ConfigError extends Error {
   }
 }
 
-export type LlmProviderName = 'anthropic' | 'groq';
+export type LlmProviderName = 'anthropic' | 'groq' | 'gemini';
 
 /** Anything env-shaped, so callers and tests can pass a plain object. */
 type EnvLike = Record<string, string | undefined>;
@@ -23,11 +23,19 @@ type EnvLike = Record<string, string | undefined>;
 export const DEFAULT_MODELS: Record<LlmProviderName, string> = {
   anthropic: 'claude-sonnet-4-5',
   groq: 'openai/gpt-oss-120b',
+  gemini: 'gemini-2.5-flash',
 };
 
 const KEY_VAR: Record<LlmProviderName, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   groq: 'GROQ_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+};
+
+const MODEL_VAR: Record<LlmProviderName, string> = {
+  anthropic: 'ANTHROPIC_MODEL',
+  groq: 'GROQ_MODEL',
+  gemini: 'GEMINI_MODEL',
 };
 
 export interface AppConfig {
@@ -46,17 +54,19 @@ export interface AppConfig {
  */
 export function resolveProvider(env: EnvLike = process.env): LlmProviderName {
   const explicit = env.LLM_PROVIDER?.trim().toLowerCase();
-  if (explicit === 'groq' || explicit === 'anthropic') return explicit;
+  if (explicit === 'groq' || explicit === 'anthropic' || explicit === 'gemini') return explicit;
   if (explicit) {
-    throw new Error(`LLM_PROVIDER must be "anthropic" or "groq" (got "${explicit}").`);
+    throw new Error(`LLM_PROVIDER must be "gemini", "groq" or "anthropic" (got "${explicit}").`);
   }
+  // Inference order matches the documented preference, so a deployment holding
+  // only one key is never asked for another provider's.
+  if (env.GEMINI_API_KEY?.trim()) return 'gemini';
   if (env.GROQ_API_KEY?.trim()) return 'groq';
   return 'anthropic';
 }
 
 export function modelFor(provider: LlmProviderName, env: EnvLike = process.env): string {
-  const override = provider === 'groq' ? env.GROQ_MODEL : env.ANTHROPIC_MODEL;
-  return override?.trim() || DEFAULT_MODELS[provider];
+  return env[MODEL_VAR[provider]]?.trim() || DEFAULT_MODELS[provider];
 }
 
 function req(name: string, missing: string[]): string {
@@ -100,7 +110,12 @@ export function configStatus(): {
   try {
     provider = resolveProvider();
   } catch {
-    return { ok: false, missing: ['LLM_PROVIDER (must be "anthropic" or "groq")'], provider: null, model: null };
+    return {
+      ok: false,
+      missing: ['LLM_PROVIDER (must be "gemini", "groq" or "anthropic")'],
+      provider: null,
+      model: null,
+    };
   }
   for (const k of ['MONDAY_API_TOKEN', 'MONDAY_DEALS_BOARD_ID', 'MONDAY_WORK_ORDERS_BOARD_ID', KEY_VAR[provider]]) {
     if (!process.env[k]?.trim()) missing.push(k);

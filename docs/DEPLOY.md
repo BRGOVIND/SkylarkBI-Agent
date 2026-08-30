@@ -7,11 +7,13 @@ credentials that must come from you — they cannot be provisioned from source.
 
 1. **monday.com API token** — monday.com → avatar → *Developers* → *My access tokens*
 2. **Two board IDs** — create the boards first (below)
-3. **An LLM API key** — either:
-   - **Groq** (recommended, free tier): https://console.groq.com/keys — default model `openai/gpt-oss-120b`
+3. **An LLM API key** — one of:
+   - **Google Gemini** (primary, free tier): https://aistudio.google.com/apikey — default model `gemini-2.5-flash`
+   - **Groq** (free tier, but only 8k tokens/minute): https://console.groq.com/keys
    - **Anthropic** (paid): https://console.anthropic.com
 
-   Only one is needed. The app requires the key for whichever provider you select.
+   Only one is needed. The app requires the key for whichever provider you
+   select, and never asks for the others.
 
 ## Step 1 — create the monday.com boards
 
@@ -51,21 +53,29 @@ Then verify the model end to end against the live boards:
 npm run smoke:llm
 ```
 
-On Groq's free tier, check your token budget first — this costs ~30 tokens:
+First confirm the key, model and endpoint work — one minimal request:
 
 ```powershell
 npm run smoke:llm -- --probe
 ```
 
-Then validate the real integration with a single scenario:
+Then validate the real integration with a single scenario (~7-10k tokens):
 
 ```powershell
 npm run smoke:llm -- --quick
 ```
 
-The full six-scenario run is paced ~65s apart, because each scenario costs
-~7-10k tokens against a free-tier ceiling of 8,000 tokens per minute. Running
-them back-to-back will 429. Use `--gap <seconds>` to widen the spacing.
+Then the full six scenarios:
+
+```powershell
+npm run smoke:llm
+```
+
+Pacing between scenarios adapts to the provider: 8s by default, but 65s on
+Groq, whose free tier allows only 8,000 tokens per minute (one scenario costs
+~7-10k, so back-to-back runs will 429 there). Override with `--gap <seconds>`.
+Gemini's free tier is substantially more generous; check your live limits at
+https://aistudio.google.com/rate-limit
 
 ## Step 3 — deploy
 
@@ -83,9 +93,10 @@ vercel env add MONDAY_DEALS_BOARD_ID production
 vercel env add MONDAY_WORK_ORDERS_BOARD_ID production
 
 # Then ONE provider:
-vercel env add LLM_PROVIDER production      # value: groq
-vercel env add GROQ_API_KEY production
-# ...or, for Anthropic: LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY
+vercel env add LLM_PROVIDER production      # value: gemini
+vercel env add GEMINI_API_KEY production
+# ...or LLM_PROVIDER=groq + GROQ_API_KEY
+# ...or LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY
 
 vercel --prod          # redeploy so the new vars take effect
 ```

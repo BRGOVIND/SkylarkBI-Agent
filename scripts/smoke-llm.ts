@@ -22,7 +22,9 @@
 
 import { runAgent, type AgentEvent } from '../src/lib/agent/run';
 import { configStatus, loadConfig } from '../src/lib/config';
-import { GroqProvider, readRateLimit } from '../src/lib/agent/providers/groq';
+import { createProvider } from '../src/lib/agent/factory';
+import { GroqProvider } from '../src/lib/agent/providers/groq';
+import { GeminiProvider } from '../src/lib/agent/providers/gemini';
 
 interface Scenario {
   question: string;
@@ -82,55 +84,71 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 async function probe(): Promise<void> {
   const cfg = loadConfig();
-  if (cfg.llm.provider !== 'groq') {
-    console.log(`--probe currently reports Groq limits only; provider is "${cfg.llm.provider}".`);
-    return;
-  }
+  console.log(`Probing ${cfg.llm.provider} with model ${cfg.llm.model} (one minimal request)…
+`);
 
   let seen: Record<string, string | undefined> = {};
-  const provider = new GroqProvider({
-    apiKey: cfg.llm.apiKey,
-    model: cfg.llm.model,
-    maxAttempts: 1,
-    onRateLimit: (info) => {
-      seen = info as Record<string, string | undefined>;
-    },
-  });
+  const minimal = {
+    system: 'Reply with the single word: ok',
+    tools: [],
+    messages: [{ role: 'user' as const, text: 'ok' }],
+    maxTokens: 16,
+  };
 
-  console.log(`Probing Groq with model ${cfg.llm.model} (one minimal request)…\n`);
+  const provider =
+    cfg.llm.provider === 'groq'
+      ? new GroqProvider({
+          apiKey: cfg.llm.apiKey,
+          model: cfg.llm.model,
+          maxAttempts: 1,
+          onRateLimit: (info) => {
+            seen = info as Record<string, string | undefined>;
+          },
+        })
+      : cfg.llm.provider === 'gemini'
+        ? new GeminiProvider({ apiKey: cfg.llm.apiKey, model: cfg.llm.model, maxAttempts: 1 })
+        : createProvider(cfg);
+
+  let ok = false;
   try {
-    const turn = await provider.complete({
-      system: 'Reply with the single word: ok',
-      tools: [],
-      messages: [{ role: 'user', text: 'ok' }],
-      maxTokens: 5,
-    });
+    const turn = await provider.complete(minimal);
+    ok = true;
     console.log(`  request succeeded — model replied: ${JSON.stringify(turn.text.join(' ').slice(0, 40))}`);
   } catch (err) {
-    console.log(`  request failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.log(`  request FAILED: ${err instanceof Error ? err.message : String(err)}`);
     const rl = (err as { rateLimit?: Record<string, string | undefined> }).rateLimit;
     if (rl) seen = rl;
   }
 
-  console.log('\nAccount limits reported by Groq:');
-  const rows: Array<[string, string | undefined]> = [
-    ['requests allowed', seen.limitRequests],
-    ['requests remaining', seen.remainingRequests],
-    ['requests reset in', seen.resetRequests],
-    ['tokens allowed (per minute)', seen.limitTokens],
-    ['tokens remaining', seen.remainingTokens],
-    ['tokens reset in', seen.resetTokens],
-  ];
-  for (const [k, v] of rows) console.log(`  ${k.padEnd(30)} ${v ?? '(not reported)'}`);
+  if (Object.values(seen).some(Boolean)) {
+    console.log(`\nRate-limit budget reported by the provider:`);
+    const rows: Array<[string, string | undefined]> = [
+      ['requests allowed', seen.limitRequests],
+      ['requests remaining', seen.remainingRequests],
+      ['requests reset in', seen.resetRequests],
+      ['tokens allowed (per minute)', seen.limitTokens],
+      ['tokens remaining', seen.remainingTokens],
+      ['tokens reset in', seen.resetTokens],
+    ];
+    for (const [k, v] of rows) console.log(`  ${k.padEnd(30)} ${v ?? '(not reported)'}`);
 
-  const tpm = Number(seen.limitTokens);
-  if (Number.isFinite(tpm) && tpm > 0) {
-    console.log(`\n  One smoke scenario costs roughly 7,000-10,000 tokens.`);
-    if (tpm < 12_000) {
-      console.log(`  At ${tpm} tokens/minute you can run about ONE scenario per minute.`);
-      console.log(`  Use --quick, or the default pacing (--gap ${arg('gap') ?? 65}s).`);
-    } else {
-      console.log(`  At ${tpm} tokens/minute the full run should complete comfortably.`);
+    const tpm = Number(seen.limitTokens);
+    if (Number.isFinite(tpm) && tpm > 0) {
+      console.log(`
+  One smoke scenario costs roughly 7,000-10,000 tokens.`);
+      console.log(
+        tpm < 12_000
+          ? `  At ${tpm} tokens/minute you can run about ONE scenario per minute — use --quick.`
+          : `  At ${tpm} tokens/minute the full run should complete comfortably.`,
+      );
+    }
+  } else if (cfg.llm.provider === 'gemini') {
+    // Google does not return x-ratelimit-* headers on this endpoint; the
+    // authoritative figures live in AI Studio.
+    console.log(`\n  Gemini does not return rate-limit headers on this endpoint.`);
+    console.log('  View your live limits at https://aistudio.google.com/rate-limit');
+    if (ok) {
+      console.log(`\n  The key, model and endpoint are all working. Next: --quick`);
     }
   }
 }
@@ -200,7 +218,10 @@ async function main() {
   }
 
   const onlyIdx = arg('only') ? Number(arg('only')) : null;
-  const gapSeconds = Number(arg('gap') ?? 65);
+  // Groq's 8k TPM ceiling needs a full window between scenarios; other
+  // providers are far more generous, so they only need light spacing.
+  const defaultGap = configStatus().provider === 'groq' ? 65 : 8;
+  const gapSeconds = Number(arg('gap') ?? defaultGap);
 
   let list: Array<{ s: Scenario; label: number }>;
   if (has('quick')) {
